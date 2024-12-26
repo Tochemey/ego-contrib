@@ -7,7 +7,7 @@ Thumbs.db
 *.iml
 *.so
 coverage.*
-../../../github.com.hashicorp.memdb/vendor
+vendor
 gen.env
 .env
 gen/

@@ -1,6 +1,8 @@
-module github.com/tochemey/ego-contrib/offetstore/github.com.hashicorp/memdb
+module github.com/tochemey/ego-contrib/offsetstore/memory
 
 go 1.22.0
+
+toolchain go1.23.4
 
 require (
 	github.com/google/uuid v1.6.0
