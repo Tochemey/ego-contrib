@@ -88,7 +88,6 @@ func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
 	// get the host and port of the database connection
 	hostAndPort := resource.GetHostPort("5432/tcp")
 	databaseURL := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", dbUser, dbPassword, hostAndPort, dbName)
-	log.Println("Connecting to database on url: ", databaseURL)
 	// Tell docker to hard kill the container in 120 seconds
 	_ = resource.Expire(120)
 	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
