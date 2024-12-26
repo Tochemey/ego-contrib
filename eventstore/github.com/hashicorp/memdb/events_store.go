@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-package memory
+package memdb
 
 import (
 	"context"

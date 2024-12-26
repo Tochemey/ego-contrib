@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-package memory
+package memdb
 
 import (
 	"github.com/hashicorp/go-memdb"
