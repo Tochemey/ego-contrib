@@ -2,8 +2,6 @@ module github.com/tochemey/ego-contrib/eventstore/memory
 
 go 1.22.0
 
-toolchain go1.23.4
-
 require (
 	github.com/deckarep/golang-set/v2 v2.7.0
 	github.com/google/uuid v1.6.0
