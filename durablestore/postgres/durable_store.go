@@ -36,8 +36,6 @@ import (
 
 	"github.com/tochemey/ego/v3/egopb"
 	"github.com/tochemey/ego/v3/persistence"
-
-	postgres "github.com/tochemey/ego-contrib/durablestore/postgres/internal"
 )
 
 var (
@@ -54,9 +52,9 @@ var (
 )
 
 // DurableStore implements the DurableStore interface
-// and helps persist events in a Postgres database
+// and helps persist events in a database database
 type DurableStore struct {
-	db postgres.Postgres
+	db database
 	sb sq.StatementBuilderType
 	// hold the connection state to avoid multiple connection of the same instance
 	connected *atomic.Bool
@@ -68,7 +66,7 @@ var _ persistence.StateStore = (*DurableStore)(nil)
 // NewDurableStore creates a new instance of StateStore
 func NewDurableStore(config *Config) *DurableStore {
 	// create the underlying db connection
-	db := postgres.New(postgres.NewConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
+	db := newDatabase(newConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
 	return &DurableStore{
 		db:        db,
 		sb:        sq.StatementBuilder.PlaceholderFormat(sq.Dollar),

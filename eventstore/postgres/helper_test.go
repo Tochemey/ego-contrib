@@ -28,11 +28,9 @@ import (
 	"context"
 	"os"
 	"testing"
-
-	postgres "github.com/tochemey/ego-contrib/eventstore/postgres/internal"
 )
 
-var testContainer *postgres.TestContainer
+var testContainer *TestContainer
 
 const (
 	testUser             = "test"
@@ -44,7 +42,7 @@ const (
 // making use of the postgres database container
 func TestMain(m *testing.M) {
 	// set the test container
-	testContainer = postgres.NewTestContainer(testDatabase, testUser, testDatabasePassword)
+	testContainer = NewTestContainer(testDatabase, testUser, testDatabasePassword)
 	// execute the tests
 	code := m.Run()
 	// free resources
@@ -54,7 +52,7 @@ func TestMain(m *testing.M) {
 }
 
 // dbHandle returns a test db
-func dbHandle(ctx context.Context) (*postgres.TestDB, error) {
+func dbHandle(ctx context.Context) (*TestDB, error) {
 	db := testContainer.GetTestDB()
 	if err := db.Connect(ctx); err != nil {
 		return nil, err

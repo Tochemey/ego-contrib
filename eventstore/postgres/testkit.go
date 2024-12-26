@@ -39,7 +39,7 @@ import (
 	"github.com/ory/dockertest/v3/docker"
 )
 
-// TestContainer helps creates a Postgres docker container to
+// TestContainer helps creates a database docker container to
 // run unit tests
 type TestContainer struct {
 	host   string
@@ -55,7 +55,7 @@ type TestContainer struct {
 	dbPass string
 }
 
-// NewTestContainer create a Postgres test container useful for unit and integration tests
+// NewTestContainer create a database test container useful for unit and integration tests
 // This function will exit when there is an error.Call this function inside your SetupTest to create the container before each test.
 func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
 	// create the docker pool
@@ -121,11 +121,11 @@ func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
 	return container
 }
 
-// GetTestDB returns a Postgres TestDB that can be used in the tests
+// GetTestDB returns a database TestDB that can be used in the tests
 // to perform some database queries
 func (c TestContainer) GetTestDB() *TestDB {
 	return &TestDB{
-		New(&Config{
+		newDatabase(&dbConfig{
 			DBHost:                c.host,
 			DBPort:                c.port,
 			DBName:                c.dbName,
@@ -167,7 +167,7 @@ func (c TestContainer) Cleanup() {
 // TestDB is used in test to perform
 // some database queries
 type TestDB struct {
-	Postgres
+	database
 }
 
 // DropTable utility function to drop a database table
@@ -177,7 +177,7 @@ func (c TestDB) DropTable(ctx context.Context, tableName string) error {
 	return err
 }
 
-// TableExists utility function to help check the existence of table in Postgres
+// TableExists utility function to help check the existence of table in database
 // tableName is in the format: <schemaName.tableName>. e.g: public.users
 func (c TestDB) TableExists(ctx context.Context, tableName string) error {
 	var stmt = fmt.Sprintf("SELECT to_regclass('%s');", tableName)
@@ -192,7 +192,7 @@ func (c TestDB) TableExists(ctx context.Context, tableName string) error {
 	return nil
 }
 
-// Count utility function to help count the number of rows in a Postgres table.
+// Count utility function to help count the number of rows in a database table.
 // tableName is in the format: <schemaName.tableName>. e.g: public.users
 // It returns -1 when there is an error
 func (c TestDB) Count(ctx context.Context, tableName string) (int, error) {
@@ -203,7 +203,7 @@ func (c TestDB) Count(ctx context.Context, tableName string) (int, error) {
 	return count, nil
 }
 
-// CreateSchema helps create a test schema in a Postgres database
+// CreateSchema helps create a test schema in a database database
 func (c TestDB) CreateSchema(ctx context.Context, schemaName string) error {
 	stmt := fmt.Sprintf("CREATE SCHEMA %s", schemaName)
 	if _, err := c.Exec(ctx, stmt); err != nil {
@@ -212,7 +212,7 @@ func (c TestDB) CreateSchema(ctx context.Context, schemaName string) error {
 	return nil
 }
 
-// SchemaExists helps check the existence of a Postgres schema. Very useful when implementing tests
+// SchemaExists helps check the existence of a database schema. Very useful when implementing tests
 func (c TestDB) SchemaExists(ctx context.Context, schemaName string) (bool, error) {
 	stmt := fmt.Sprintf("SELECT schema_name FROM information_schema.schemata WHERE schema_name = '%s';", schemaName)
 	var check string

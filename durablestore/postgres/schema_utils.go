@@ -26,17 +26,15 @@ package postgres
 
 import (
 	"context"
-
-	postgres "github.com/tochemey/ego-contrib/durablestore/postgres/internal"
 )
 
 // SchemaUtils help create the various test tables in unit/integration tests
 type SchemaUtils struct {
-	db *postgres.TestDB
+	db *TestDB
 }
 
 // NewSchemaUtils creates an instance of SchemaUtils
-func NewSchemaUtils(db *postgres.TestDB) *SchemaUtils {
+func NewSchemaUtils(db *TestDB) *SchemaUtils {
 	return &SchemaUtils{db: db}
 }
 

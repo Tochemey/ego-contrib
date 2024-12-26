@@ -106,7 +106,7 @@ func (pg *postgres) Connect(ctx context.Context) error {
 // TODO: enhance this with the SSL settings
 func createConnectionString(host string, port int, name, user string, password string, schema string) string {
 	info := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable", host, port, user, name)
-	// The Postgres driver gets confused in cases where the user has no password
+	// The ipostgres driver gets confused in cases where the user has no password
 	// set but a password is passed, so only set password if its non-empty
 	if password != "" {
 		info += fmt.Sprintf(" password=%s", password)

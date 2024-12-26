@@ -39,13 +39,13 @@ type account struct {
 	AccountName string
 }
 
-// PostgresTestSuite will run the Postgres tests
+// PostgresTestSuite will run the database tests
 type PostgresTestSuite struct {
 	suite.Suite
 	container *TestContainer
 }
 
-// SetupSuite starts the Postgres database engine and set the container
+// SetupSuite starts the database database engine and set the container
 // host and port to use in the tests
 func (s *PostgresTestSuite) SetupSuite() {
 	s.container = NewTestContainer("testdb", "test", "test")
@@ -72,7 +72,7 @@ func (s *PostgresTestSuite) TestConnect() {
 
 	s.Run("with invalid database port", func() {
 		ctx := context.TODO()
-		db := New(&Config{
+		db := newDatabase(&dbConfig{
 			DBUser:                "test",
 			DBName:                "testdb",
 			DBPassword:            "test",
@@ -91,7 +91,7 @@ func (s *PostgresTestSuite) TestConnect() {
 
 	s.Run("with invalid database name", func() {
 		ctx := context.TODO()
-		db := New(&Config{
+		db := newDatabase(&dbConfig{
 			DBUser:                "test",
 			DBName:                "wrong-name",
 			DBPassword:            "test",
@@ -110,7 +110,7 @@ func (s *PostgresTestSuite) TestConnect() {
 
 	s.Run("with invalid database user", func() {
 		ctx := context.TODO()
-		db := New(&Config{
+		db := newDatabase(&dbConfig{
 			DBUser:                "test-user",
 			DBName:                "testdb",
 			DBPassword:            "test",
@@ -129,7 +129,7 @@ func (s *PostgresTestSuite) TestConnect() {
 
 	s.Run("with invalid database password", func() {
 		ctx := context.TODO()
-		db := New(&Config{
+		db := newDatabase(&dbConfig{
 			DBUser:                "test",
 			DBName:                "testdb",
 			DBPassword:            "invalid-db-pass",
@@ -304,7 +304,7 @@ func (s *PostgresTestSuite) TestClose() {
 	s.Assert().EqualError(err, "closed pool")
 }
 
-func createTable(ctx context.Context, db Postgres) error {
+func createTable(ctx context.Context, db database) error {
 	// let us create a test table
 	const schemaDDL = `
 		CREATE TABLE IF NOT EXISTS accounts
@@ -318,7 +318,7 @@ func createTable(ctx context.Context, db Postgres) error {
 	return err
 }
 
-func insertInto(ctx context.Context, db Postgres, account *account) error {
+func insertInto(ctx context.Context, db database, account *account) error {
 	const insertSQL = `INSERT INTO accounts(account_id, account_name) VALUES($1, $2);`
 	_, err := db.Exec(ctx, insertSQL, account.AccountID, account.AccountName)
 	return err

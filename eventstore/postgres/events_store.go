@@ -35,8 +35,6 @@ import (
 	"github.com/tochemey/ego/v3/persistence"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
-
-	postgres "github.com/tochemey/ego-contrib/eventstore/postgres/internal"
 )
 
 var (
@@ -56,13 +54,13 @@ var (
 )
 
 // EventsStore implements the EventsStore interface
-// and helps persist events in a Postgres database
+// and helps persist events in a database database
 type EventsStore struct {
-	db postgres.Postgres
+	db database
 	sb sq.StatementBuilderType
 	// insertBatchSize represents the chunk of data to bulk insert.
 	// This helps avoid the postgres 65535 parameter limit.
-	// This is necessary because Postgres uses a 32-bit int for binding input parameters and
+	// This is necessary because database uses a 32-bit int for binding input parameters and
 	// is not able to track anything larger.
 	// Note: Change this value when you know the size of data to bulk insert at once. Otherwise, you
 	// might encounter the postgres 65535 parameter limit error.
@@ -77,7 +75,7 @@ var _ persistence.EventsStore = (*EventsStore)(nil)
 // NewEventsStore creates a new instance of PostgresEventStore
 func NewEventsStore(config *Config) *EventsStore {
 	// create the underlying db connection
-	db := postgres.New(postgres.NewConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
+	db := newDatabase(newConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
 	return &EventsStore{
 		db:              db,
 		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),

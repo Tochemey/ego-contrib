@@ -36,7 +36,7 @@ type testkitSuite struct {
 	container *TestContainer
 }
 
-// SetupSuite starts the Postgres database engine and set the container
+// SetupSuite starts the database database engine and set the container
 // host and port to use in the tests
 func (s *testkitSuite) SetupSuite() {
 	s.container = NewTestContainer("testdb", "test", "test")

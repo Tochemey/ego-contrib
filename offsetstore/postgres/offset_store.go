@@ -65,13 +65,13 @@ type offsetRow struct {
 }
 
 // OffsetStore implements the OffsetStore interface
-// and helps persist events in a Postgres database
+// and helps persist events in a ipostgres database
 type OffsetStore struct {
 	db postgres.Postgres
 	sb sq.StatementBuilderType
 	// insertBatchSize represents the chunk of data to bulk insert.
 	// This helps avoid the postgres 65535 parameter limit.
-	// This is necessary because Postgres uses a 32-bit int for binding input parameters and
+	// This is necessary because ipostgres uses a 32-bit int for binding input parameters and
 	// is not able to track anything larger.
 	// Note: Change this value when you know the size of data to bulk insert at once. Otherwise, you
 	// might encounter the postgres 65535 parameter limit error.

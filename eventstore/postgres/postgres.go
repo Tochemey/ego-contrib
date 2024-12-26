@@ -34,8 +34,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Postgres will be implemented by concrete RDBMS store
-type Postgres interface {
+// database will be implemented by concrete RDBMS store
+type database interface {
 	// Connect connects to the underlying database
 	Connect(ctx context.Context) error
 	// Disconnect closes the underlying opened underlying connection database
@@ -57,20 +57,20 @@ type Postgres interface {
 type postgres struct {
 	connStr string
 	pool    *pgxpool.Pool
-	config  *Config
+	config  *dbConfig
 }
 
-var _ Postgres = (*postgres)(nil)
+var _ database = (*postgres)(nil)
 
-// New returns a store connecting to the given Postgres database.
-func New(config *Config) Postgres {
+// newDatabase returns a store connecting to the given database
+func newDatabase(config *dbConfig) database {
 	postgres := new(postgres)
 	postgres.config = config
 	postgres.connStr = createConnectionString(config.DBHost, config.DBPort, config.DBName, config.DBUser, config.DBPassword, config.DBSchema)
 	return postgres
 }
 
-// Connect will connect to our Postgres database
+// Connect will connect to our database database
 func (pg *postgres) Connect(ctx context.Context) error {
 	// create the connection config
 	config, err := pgxpool.ParseConfig(pg.connStr)
@@ -101,12 +101,12 @@ func (pg *postgres) Connect(ctx context.Context) error {
 	return nil
 }
 
-// createConnectionString will create the Postgres connection string from the
+// createConnectionString will create the database connection string from the
 // supplied connection details
 // TODO: enhance this with the SSL settings
 func createConnectionString(host string, port int, name, user string, password string, schema string) string {
 	info := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable", host, port, user, name)
-	// The Postgres driver gets confused in cases where the user has no password
+	// The database driver gets confused in cases where the user has no password
 	// set but a password is passed, so only set password if its non-empty
 	if password != "" {
 		info += fmt.Sprintf(" password=%s", password)

@@ -26,10 +26,10 @@ package postgres
 
 import "time"
 
-// Config defines the postgres configuration
+// dbConfig defines the postgres configuration
 // This configuration does not take into consideration the SSL mode
 // TODO: enhance with SSL mode
-type Config struct {
+type dbConfig struct {
 	DBHost                string        // DBHost represents the database host
 	DBPort                int           // DBPort is the database port
 	DBName                string        // DBName is the database name
@@ -43,9 +43,9 @@ type Config struct {
 	HealthCheckPeriod     time.Duration // HeathCheckPeriod is the duration between checks of the health of idle connections.
 }
 
-// NewConfig creates an instance of Config
-func NewConfig(host string, port int, user, password, dbName string) *Config {
-	return &Config{
+// newConfig creates an instance of dbConfig
+func newConfig(host string, port int, user, password, dbName string) *dbConfig {
+	return &dbConfig{
 		DBHost:                host,
 		DBPort:                port,
 		DBName:                dbName,
