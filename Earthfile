@@ -7,3 +7,5 @@ test:
 		BUILD --allow-privileged ./eventstore/postgres+test
 		BUILD --allow-privileged ./durablestore/postgres+test
 		BUILD --allow-privileged ./durablestore/memory+test
+		BUILD --allow-privileged ./offsetstore/github.com/hashicorp/memdb+test
+		BUILD --allow-privileged ./offsetstore/postgres+test

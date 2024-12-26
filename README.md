@@ -1,15 +1,21 @@
 # eGo contrib
 
+[![build](https://img.shields.io/github/actions/workflow/status/Tochemey/ego-contrib/build.yml?branch=main)](https://github.com/Tochemey/ego-contrib/actions/workflows/build.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tochemey/ego.svg)](https://pkg.go.dev/github.com/tochemey/ego-contrib)
+
 Collection of 3rd-party package for [eGo](https://github.com/Tochemey/ego)
 
 ## Content
 
-- [Events Stores](./eventstore): Packages providing all event stores that can be used with eGo when building an events-sourced application
+- [Events Stores](./eventstore): Packages providing all event stores that can be used with eGo when building an events-sourced application.
     - [Hashicorp Memdb](./eventstore/github.com/hashicorp/memdb): (for testing purpose only)
     - [Postgres](./eventstore/postgres): fully functional. Schema can be found [here](./eventstore/postgres/resources/eventstore_postgres.sql). The schema needs to be created before using the store.
 - [Durable Stores](./durablestore): Packages providing all durable state stores that can be used with eGo DurableStateEntity.
     - [Memory](./durablestore/memory): (for testing purpose only)
     - [Postgres](./durablestore/postgres): fully functional. Schema can be found [here](./durablestore/postgres/resources/durablestore_postgres.sql). The schema needs to be created before using the store.
+- [Offset Store](./offsetstore): Packages providing all offset stores that can be used with eGo when building an events-sourced application.
+  - [Hashicorp Memdb](./offsetstore/github.com/hashicorp/memdb): (for testing purpose only)
+  - [Postgres](./offsetstore/postgres): fully functional. Schema can be found [here](./offsetstore/postgres/resources/offsetstore_postgres.sql). The schema needs to be created before using the store.
 
 ## Contribution
 
@@ -24,7 +30,7 @@ There are two ways you can become a contributor:
 2. Follow these steps
 
 - Fork the repository
-- Create a feature branch
+- Create a feature branch by following the existing package and naming patterns
 - Set your docker credentials on your fork using the following secret names: `DOCKER_USER` and `DOCKER_PASS`
 - Submit a [pull request](https://help.github.com/articles/using-pull-requests)
 
