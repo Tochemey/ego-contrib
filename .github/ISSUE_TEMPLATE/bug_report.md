@@ -1,7 +1,7 @@
 ---
 name: Bug report
 about: Create a report to help us improve
-title: ''
+title: "[fix]"
 labels: bug
 assignees: Tochemey
 
@@ -21,8 +21,9 @@ If applicable, add screenshots to help explain your problem.
 
 **Library Version:**
 
-- Go-Akt version: [e.g. 2.1.0]
-- Go version: [e.g. 1.22]
+- ego version: [e.g. 2.1.0]
+- ego-contrib version [e.g. 2.1.0]
+- go version: [e.g. 1.22]
 
 **Additional context**
 Add any other context about the problem here.
