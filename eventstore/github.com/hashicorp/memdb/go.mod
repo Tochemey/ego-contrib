@@ -2,7 +2,6 @@ module github.com/tochemey/ego-contrib/eventstore/github.com.hashicorp/memdb
 
 go 1.22.0
 
-
 require (
 	github.com/deckarep/golang-set/v2 v2.7.0
 	github.com/google/uuid v1.6.0
