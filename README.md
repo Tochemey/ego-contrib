@@ -5,9 +5,13 @@ Collection of 3rd-party package for [eGo](https://github.com/Tochemey/ego)
 ## Content
 
 - [Events Stores](./eventstore): Packages providing all event stores that can be used with eGo when building an events-sourced application
+    - [Hashicorp Memdb](./eventstore/github.com/hashicorp/memdb): (for testing purpose only)
+    - [Postgres](./eventstore/postgres): fully functional. Schema can be found [here](./eventstore/postgres/resources/eventstore_postgres.sql). The schema needs to be created before using the store.
 - [Durable Stores](./durablestore): Packages providing all durable state stores that can be used with eGo DurableStateEntity.
+    - [Memory](./durablestore/memory): (for testing purpose only)
+    - [Postgres](./durablestore/postgres): fully functional. Schema can be found [here](./durablestore/postgres/resources/durablestore_postgres.sql). The schema needs to be created before using the store.
 
-### Contribution
+## Contribution
 
 Contributions are welcome!
 The project adheres to [Semantic Versioning](https://semver.org)
