@@ -13,7 +13,7 @@ Collection of 3rd-party packages for [eGo](https://github.com/Tochemey/ego)
 - [Durable Stores](./durablestore): Contains data store packages to build non-event-sourcing applications with eGo. See [reference](https://github.com/Tochemey/ego?tab=readme-ov-file#durable-state-behavior).
     - [Memory](./durablestore/memory): This store should only be used in testing. It is powered by go standard thread-safe map.
     - [Postgres](./durablestore/postgres): Schema can be found [here](./durablestore/postgres/resources/durablestore_postgres.sql). The schema needs to be created before using the store.
-    - [DynamoDB](./durablestore/dynamodb): Table 'states_store' needs to be created before using the store.
+    - [DynamoDB](./durablestore/dynamodb): Table `states_store` with Parition Key (PK) of `PersistenceID` needs to be created before using the store.
 - [Offset Store](./offsetstore): Packages providing all offset stores for [Projections](https://github.com/Tochemey/ego?tab=readme-ov-file#projection).
   - [Memory](./offsetstore/memory): It is powered by [hashicorp memdb](https://github.com/hashicorp/go-memdb).
   - [Postgres](./offsetstore/postgres): Schema can be found [here](./offsetstore/postgres/resources/offsetstore_postgres.sql). The schema needs to be created before using the store.
