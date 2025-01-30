@@ -3,7 +3,7 @@ package dynamodb
 import (
 	"context"
 	"fmt"
-	// "testing"
+	"testing"
 	// "time"
 
 	// "github.com/google/uuid"
@@ -20,7 +20,7 @@ type account struct {
 	AccountName string
 }
 
-// PostgresTestSuite will run the Postgres tests
+// DynamodbTestSuite will run the Postgres tests
 type DynamodbTestSuite struct {
 	suite.Suite
 	container *TestContainer
@@ -32,16 +32,17 @@ func (s *DynamodbTestSuite) SetupSuite() {
 	s.container = NewTestContainer()
 }
 
+func TestDynamodbTestSuite(t *testing.T) {
+	suite.Run(t, new(DynamodbTestSuite))
+}
+
 func (s *DynamodbTestSuite) TestConnect() {
 	s.Run("with valid connection settings", func() {
-		// Load AWS SDK config
-		cfg, err := config.LoadDefaultConfig(context.TODO(),
-			config.WithRegion("us-east-1"),
-		)
-
+		cfg, err := config.LoadDefaultConfig(context.TODO())
 		client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
 			o.BaseEndpoint = aws.String(s.container.address+"assd")
 		})
+
 		a, _ := client.ListTables(context.TODO(), &dynamodb.ListTablesInput{})
 		fmt.Println(a)
 		s.Assert().NoError(err)

@@ -1,8 +1,8 @@
 package dynamodb
 
 import (
+	"fmt"
 	"log"
-	"os"
 	"time"
 
 	dockertest "github.com/ory/dockertest/v3"
@@ -17,6 +17,7 @@ type TestContainer struct {
 
 func NewTestContainer() *TestContainer {
 	// Create a new dockertest pool
+	fmt.Println("Launching localstack")
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to Docker: %s", err)
@@ -50,16 +51,6 @@ func NewTestContainer() *TestContainer {
 	// Tell docker to hard kill the container in 120 seconds
 	_ = resource.Expire(120)
 	pool.MaxWait = 120 * time.Second
-
-	// Wait for LocalStack to be ready
-	if err := pool.Retry(func() error {
-		// Check if the container is accessible
-		_, err := os.Open("http://localhost:" + resource.GetPort("4566/tcp"))
-		return err
-	}); err != nil {
-		log.Fatalf("Could not connect to LocalStack: %s", err)
-	}
-	log.Println("LocalStack is running!")
 
 	container := new(TestContainer)
 	container.pool = pool

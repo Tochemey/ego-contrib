@@ -50,13 +50,13 @@ func New() *DynamoDurableStore {
 
 // Connect connects to the journal store
 // No connection is needed because the client is stateless
-func (d DynamoDurableStore) Connect(ctx context.Context) error {
+func (d DynamoDurableStore) Connect(_ context.Context) error {
 	return nil
 }
 
 // Disconnect disconnect the journal store
 // There is no need to disconnect because the client is stateless
-func (DynamoDurableStore) Disconnect(ctx context.Context) error {
+func (DynamoDurableStore) Disconnect(_ context.Context) error {
 	return nil
 }
 
