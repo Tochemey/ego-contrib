@@ -1,6 +1,6 @@
 VERSION 0.8
 
-FROM tochemey/docker-go:1.22.2-3.1.0
+FROM tochemey/docker-go:1.23.4-5.1.1
 
 test:
   BUILD +lint
@@ -32,7 +32,7 @@ lint:
 local-test:
     FROM +vendor
 
-    WITH DOCKER --pull localstack:4
+    WITH DOCKER --pull localstack/localstack:4
         RUN go test -mod=vendor ./...  -timeout 0 -race -v  -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
     END
 

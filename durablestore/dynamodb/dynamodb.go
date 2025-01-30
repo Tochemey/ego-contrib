@@ -37,7 +37,7 @@ type DynamoDurableStore struct {
 // enforce interface implementation
 var _ persistence.StateStore = (*DynamoDurableStore)(nil)
 
-func NewStateStore() *DynamoDurableStore {
+func New() *DynamoDurableStore {
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		return nil
@@ -81,7 +81,7 @@ func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 		"PersistenceID": &types.AttributeValueMemberS{Value: state.GetPersistenceId()}, // Partition key
 		"StatePayload":  &types.AttributeValueMemberB{Value: bytea},
 		"StateManifest": &types.AttributeValueMemberS{Value: manifest},
-		"Timestamp":     &types.AttributeValueMemberS{Value: string(state.GetTimestamp())},
+		"Timestamp":     &types.AttributeValueMemberS{Value: fmt.Sprintf("%d", state.GetTimestamp())},
 	}
 
 	_, err := d.client.PutItem(ctx, &dynamodb.PutItemInput{
