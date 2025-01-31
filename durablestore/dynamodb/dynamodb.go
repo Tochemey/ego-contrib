@@ -51,9 +51,11 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, e
 
 	return &StateItem{
 		PersistenceID: persistenceID,
+		VersionNumber: parseDynamoUint64(result.Item["VersionNumber"]),
 		StatePayload:  result.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
 		StateManifest: result.Item["StateManifest"].(*types.AttributeValueMemberS).Value,
 		Timestamp:     parseDynamoInt64(result.Item["Timestamp"]),
+		ShardNumber:   parseDynamoUint64(result.Item["ShardNumber"]),
 	}, nil
 }
 
@@ -62,9 +64,11 @@ func (ddb ddb) UpsertItem(ctx context.Context, item *StateItem) error {
 		TableName: aws.String(ddb.tableName),
 		Item: map[string]types.AttributeValue{
 			"PersistenceID": &types.AttributeValueMemberS{Value: item.PersistenceID}, // Partition key
+			"VersionNumber": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", item.VersionNumber)},
 			"StatePayload":  &types.AttributeValueMemberB{Value: item.StatePayload},
 			"StateManifest": &types.AttributeValueMemberS{Value: item.StateManifest},
 			"Timestamp":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", item.Timestamp)},
+			"ShardNumber":   &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", item.ShardNumber)},
 		},
 	})
 	if err != nil {
@@ -72,6 +76,11 @@ func (ddb ddb) UpsertItem(ctx context.Context, item *StateItem) error {
 	}
 
 	return err
+}
+
+func parseDynamoUint64(element types.AttributeValue) uint64 {
+	n, _ := strconv.ParseUint(element.(*types.AttributeValueMemberN).Value, 10, 64)
+	return n
 }
 
 func parseDynamoInt64(element types.AttributeValue) int64 {

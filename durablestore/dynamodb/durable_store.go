@@ -49,9 +49,11 @@ func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 
 	return d.ddb.UpsertItem(ctx, &StateItem{
 		PersistenceID: state.GetPersistenceId(),
+		VersionNumber: state.GetVersionNumber(),
 		StatePayload:  bytea,
 		StateManifest: manifest,
 		Timestamp:     state.GetTimestamp(),
+		ShardNumber:   state.GetShard(),
 	})
 }
 

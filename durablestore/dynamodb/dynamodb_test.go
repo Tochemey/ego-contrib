@@ -30,9 +30,11 @@ func (s *DynamodbTestSuite) TestUpsert() {
 		persistenceID := "account_1"
 		stateItem := &StateItem{
 			PersistenceID: persistenceID,
+			VersionNumber: 1,
 			StatePayload:  []byte{},
 			StateManifest: "manifest",
 			Timestamp:     int64(time.Now().UnixNano()),
+			ShardNumber:   1,
 		}
 		err := store.ddb.UpsertItem(context.Background(), stateItem)
 		s.Assert().NoError(err)

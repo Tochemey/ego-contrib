@@ -13,9 +13,11 @@ import (
 
 type StateItem struct {
 	PersistenceID string // Partition key
+	VersionNumber uint64
 	StatePayload  []byte
 	StateManifest string
 	Timestamp     int64
+	ShardNumber   uint64
 }
 
 // ToDurableState convert row to durable state
