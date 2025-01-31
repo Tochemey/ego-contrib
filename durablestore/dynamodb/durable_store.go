@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
@@ -37,14 +36,9 @@ type DynamoDurableStore struct {
 // enforce interface implementation
 var _ persistence.StateStore = (*DynamoDurableStore)(nil)
 
-func New() *DynamoDurableStore {
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		return nil
-	}
-
+func NewDurableStore(client *dynamodb.Client) *DynamoDurableStore {
 	return &DynamoDurableStore{
-		client: dynamodb.NewFromConfig(cfg),
+		client: client,
 	}
 }
 

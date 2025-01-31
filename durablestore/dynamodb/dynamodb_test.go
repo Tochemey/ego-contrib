@@ -2,7 +2,6 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	// "time"
 
@@ -43,8 +42,8 @@ func (s *DynamodbTestSuite) TestConnect() {
 			o.BaseEndpoint = aws.String(s.container.address+"assd")
 		})
 
-		a, _ := client.ListTables(context.TODO(), &dynamodb.ListTablesInput{})
-		fmt.Println(a)
+		ds := NewDurableStore(client)
+		ds.Ping(context.TODO())
 		s.Assert().NoError(err)
 	})
 }
