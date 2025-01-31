@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -20,15 +21,18 @@ type database interface {
 
 type ddb struct {
 	tableName string
-	client *dynamodb.Client
+	client    *dynamodb.Client
 }
 
 var _ database = (*ddb)(nil)
 
 func newDynamodb(tableName, region string, baseEndpoint *string) database {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "")),
 		config.WithRegion(region),
 	)
+
+	fmt.Println(*baseEndpoint)
 
 	var client *dynamodb.Client
 	if baseEndpoint != nil {
@@ -47,9 +51,9 @@ func newDynamodb(tableName, region string, baseEndpoint *string) database {
 	return ddb
 }
 
-func (ddb ddb) GetItem(ctx context.Context, persistenceId string) (*StateItem, error) {
+func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, error) {
 	key := map[string]types.AttributeValue{
-		"PersistenceID": &types.AttributeValueMemberS{Value: persistenceId},
+		"PersistenceID": &types.AttributeValueMemberS{Value: persistenceID},
 	}
 
 	result, err := ddb.client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -66,7 +70,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceId string) (*StateItem, e
 	}
 
 	return &StateItem{
-		PersistenceID: persistenceId,
+		PersistenceID: persistenceID,
 		StatePayload:  result.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
 		StateManifest: result.Item["StateManifest"].(*types.AttributeValueMemberS).Value,
 		Timestamp:     parseDynamoInt64(result.Item["Timestamp"]),
@@ -88,11 +92,6 @@ func (ddb ddb) UpsertItem(ctx context.Context, item *StateItem) error {
 	}
 
 	return err
-}
-
-func parseDynamoUint64(element types.AttributeValue) uint64 {
-	n, _ := strconv.ParseUint(element.(*types.AttributeValueMemberN).Value, 10, 64)
-	return n
 }
 
 func parseDynamoInt64(element types.AttributeValue) int64 {

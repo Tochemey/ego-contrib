@@ -37,7 +37,7 @@ func (DynamoDurableStore) Disconnect(_ context.Context) error {
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 // There is no need to ping because the client is stateless
-func (d DynamoDurableStore) Ping(ctx context.Context) error {
+func (d DynamoDurableStore) Ping(_ context.Context) error {
 	return nil
 }
 

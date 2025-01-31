@@ -12,13 +12,13 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 type TestContainer struct {
 	resource *dockertest.Resource
-	pool     *dockertest.Pool
 	address  string
 }
 
@@ -74,7 +74,6 @@ func NewTestContainer() *TestContainer {
 	pool.MaxWait = 120 * time.Second
 
 	container := new(TestContainer)
-	container.pool = pool
 	container.resource = resource
 	container.address = hostAndPort
 
@@ -92,6 +91,7 @@ func (c TestContainer) GetDdbClient() *DynamoDurableStore {
 
 func (c TestContainer) CreateTable(tableName, region string) error {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "")),
 		config.WithRegion(region),
 	)
 
@@ -105,16 +105,16 @@ func (c TestContainer) CreateTable(tableName, region string) error {
 		AttributeDefinitions: []types.AttributeDefinition{
 			{
 				AttributeName: aws.String("PersistenceID"),
-				AttributeType: types.ScalarAttributeTypeS, // String type
+				AttributeType: types.ScalarAttributeTypeS,
 			},
 		},
 		KeySchema: []types.KeySchemaElement{
 			{
 				AttributeName: aws.String("PersistenceID"),
-				KeyType:       types.KeyTypeHash, // Partition Key
+				KeyType:       types.KeyTypeHash,
 			},
 		},
-		BillingMode: types.BillingModePayPerRequest, // On-demand billing
+		BillingMode: types.BillingModePayPerRequest,
 	})
 
 	return err

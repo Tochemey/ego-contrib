@@ -33,7 +33,7 @@ local-test:
     FROM +vendor
 
     WITH DOCKER --pull amazon/dynamodb-local:2.5.4
-        RUN go test -mod=vendor ./...  -timeout 0 -race -v  -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
+        RUN go test -v -mod=vendor ./...  -timeout 0 -race -v  -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
     END
 
     SAVE ARTIFACT coverage.out AS LOCAL coverage.out

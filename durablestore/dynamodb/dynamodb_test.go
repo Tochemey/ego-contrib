@@ -26,10 +26,10 @@ func TestDynamodbTestSuite(t *testing.T) {
 
 func (s *DynamodbTestSuite) TestUpsert() {
 	s.Run("Upsert StateItem into DynamoDB and read back", func() {
-		ddb := NewTestContainer().GetDdbClient()
-		persistenceId := "account_1"
+		ddb := s.container.GetDdbClient()
+		persistenceID := "account_1"
 		stateItem := &StateItem{
-			PersistenceID: persistenceId,
+			PersistenceID: persistenceID,
 			StatePayload:  []byte{},
 			StateManifest: "manifest",
 			Timestamp:     int64(time.Now().UnixNano()),
@@ -37,7 +37,7 @@ func (s *DynamodbTestSuite) TestUpsert() {
 		err := ddb.ddb.UpsertItem(context.Background(), stateItem)
 		s.Assert().NoError(err)
 
-		respItem, err := ddb.ddb.GetItem(context.Background(), persistenceId)
+		respItem, err := ddb.ddb.GetItem(context.Background(), persistenceID)
 		s.Assert().Equal(stateItem, respItem)
 		s.Assert().NoError(err)
 	})
