@@ -6,8 +6,6 @@ import (
 	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -26,29 +24,11 @@ type ddb struct {
 
 var _ database = (*ddb)(nil)
 
-func newDynamodb(tableName, region string, baseEndpoint *string) database {
-	cfg, _ := config.LoadDefaultConfig(context.Background(),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "")),
-		config.WithRegion(region),
-	)
-
-	fmt.Println(*baseEndpoint)
-
-	var client *dynamodb.Client
-	if baseEndpoint != nil {
-		// Create an DynamoDB client with the BaseEndpoint set to DynamoDB Local
-		client = dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
-			o.BaseEndpoint = aws.String(*baseEndpoint)
-		})
-	} else {
-		client = dynamodb.NewFromConfig(cfg)
+func newDynamodb(tableName string, client *dynamodb.Client) database {
+	return ddb{
+		client:    client,
+		tableName: tableName,
 	}
-
-	ddb := new(ddb)
-	ddb.client = client
-	ddb.tableName = tableName
-
-	return ddb
 }
 
 func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, error) {

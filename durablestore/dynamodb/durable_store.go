@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"context"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/tochemey/ego/v3/egopb"
 	"github.com/tochemey/ego/v3/persistence"
 	"google.golang.org/protobuf/proto"
@@ -17,9 +18,9 @@ type DynamoDurableStore struct {
 // enforce interface implementation
 var _ persistence.StateStore = (*DynamoDurableStore)(nil)
 
-func NewDurableStore(tableName string, region string, baseEndpoint *string) *DynamoDurableStore {
+func NewDurableStore(tableName string, client *dynamodb.Client) *DynamoDurableStore {
 	return &DynamoDurableStore{
-		ddb: newDynamodb(tableName, region, baseEndpoint),
+		ddb: newDynamodb(tableName, client),
 	}
 }
 

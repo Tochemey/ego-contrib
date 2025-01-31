@@ -81,18 +81,9 @@ func NewTestContainer() *TestContainer {
 }
 
 func (c TestContainer) GetDdbClient() *DynamoDurableStore {
-	address := fmt.Sprintf("http://%s", c.address)
-	tableName := "states_store"
-	region := "us-east-1"
-	store := NewDurableStore(tableName, region, &address)
-	c.CreateTable(tableName, region)
-	return store
-}
-
-func (c TestContainer) CreateTable(tableName, region string) error {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "")),
-		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")),
+		config.WithRegion("us-east-1"),
 	)
 
 	// Create an DynamoDB client with the BaseEndpoint set to DynamoDB Local
@@ -100,6 +91,13 @@ func (c TestContainer) CreateTable(tableName, region string) error {
 		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", c.address))
 	})
 
+	tableName := "states_store"
+	store := NewDurableStore(tableName, client)
+	c.CreateTable(tableName, client)
+	return store
+}
+
+func (c TestContainer) CreateTable(tableName string, client *dynamodb.Client) error {
 	_, err := client.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
 		TableName: aws.String(tableName),
 		AttributeDefinitions: []types.AttributeDefinition{
