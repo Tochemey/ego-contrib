@@ -80,7 +80,7 @@ func NewTestContainer() *TestContainer {
 	return container
 }
 
-func (c TestContainer) GetDdbClient() *DynamoDurableStore {
+func (c TestContainer) GetDdbStore() *DynamoDurableStore {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")),
 		config.WithRegion("us-east-1"),
