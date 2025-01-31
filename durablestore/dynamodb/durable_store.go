@@ -2,26 +2,11 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/tochemey/ego/v3/egopb"
 	"github.com/tochemey/ego/v3/persistence"
 	"google.golang.org/protobuf/proto"
 )
-
-// No sort key is needed because we are only storing the latest state
-type StateItem struct {
-	PersistenceID string // Partition key
-	VersionNumber uint64
-	StatePayload  []byte
-	StateManifest string
-	Timestamp     int64
-	ShardNumber   uint64
-}
 
 const (
 	tableName = "states_store"
@@ -30,15 +15,15 @@ const (
 // DynamoDurableStore implements the DurableStore interface
 // and helps persist states in a DynamoDB
 type DynamoDurableStore struct {
-	client *dynamodb.Client
+	ddb database
 }
 
 // enforce interface implementation
 var _ persistence.StateStore = (*DynamoDurableStore)(nil)
 
-func NewDurableStore(client *dynamodb.Client) *DynamoDurableStore {
+func NewDurableStore(region string, baseEndpoint *string) *DynamoDurableStore {
 	return &DynamoDurableStore{
-		client: client,
+		ddb: newDynamodb(region, baseEndpoint),
 	}
 }
 
@@ -57,10 +42,6 @@ func (DynamoDurableStore) Disconnect(_ context.Context) error {
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 // There is no need to ping because the client is stateless
 func (d DynamoDurableStore) Ping(ctx context.Context) error {
-	_, err := d.client.ListTables(ctx, &dynamodb.ListTablesInput{})
-	if err != nil {
-		return fmt.Errorf("failed to fetch tables in the dynamodb: %w", err)
-	}
 	return nil
 }
 
@@ -69,66 +50,20 @@ func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 	bytea, _ := proto.Marshal(state.GetResultingState())
 	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
 
-	// Define the item to upsert
-	item := map[string]types.AttributeValue{
-		"PersistenceID": &types.AttributeValueMemberS{Value: state.GetPersistenceId()}, // Partition key
-		"StatePayload":  &types.AttributeValueMemberB{Value: bytea},
-		"StateManifest": &types.AttributeValueMemberS{Value: manifest},
-		"Timestamp":     &types.AttributeValueMemberS{Value: fmt.Sprintf("%d", state.GetTimestamp())},
-	}
-
-	_, err := d.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(tableName),
-		Item:      item,
+	return d.ddb.UpsertItem(ctx, &StateItem{
+		PersistenceID: state.GetPersistenceId(),
+		StatePayload:  bytea,
+		StateManifest: manifest,
+		Timestamp:     state.GetTimestamp(),
 	})
-	if err != nil {
-		return fmt.Errorf("failed to upsert state into the dynamodb: %w", err)
-	}
-
-	return nil
 }
 
 // GetLatestState fetches the latest durable state
 func (d DynamoDurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
-	// Get criteria
-	key := map[string]types.AttributeValue{
-		"PersistenceID": &types.AttributeValueMemberS{Value: persistenceID},
-	}
-
-	// Perform the GetItem operation
-	resp, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(tableName),
-		Key:       key,
-	})
+	result, err := d.ddb.GetItem(ctx, persistenceID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the latest state from the dynamodb: %w", err)
+		return nil, err
 	}
 
-	// Check if item exists
-	if resp.Item == nil {
-		return nil, nil
-	}
-
-	item := &StateItem{
-		PersistenceID: persistenceID,
-		VersionNumber: parseDynamoUint64(resp.Item["VersionNumber"]),
-		StatePayload:  resp.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
-		StateManifest: resp.Item["StateManifest"].(*types.AttributeValueMemberS).Value,
-		Timestamp:     parseDynamoInt64(resp.Item["Timestamp"]),
-		ShardNumber:   parseDynamoUint64(resp.Item["ShardNumber"]),
-	}
-
-	// unmarshal the event and the state
-	state, err := toProto(item.StateManifest, item.StatePayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal the durable state: %w", err)
-	}
-
-	return &egopb.DurableState{
-		PersistenceId:  persistenceID,
-		VersionNumber:  item.VersionNumber,
-		ResultingState: state,
-		Timestamp:      item.Timestamp,
-		Shard:          item.ShardNumber,
-	}, nil
+	return result.ToDurableState()
 }

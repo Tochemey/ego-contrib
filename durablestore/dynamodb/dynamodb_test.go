@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -25,8 +26,9 @@ func TestDynamodbTestSuite(t *testing.T) {
 
 func (s *DynamodbTestSuite) TestPing() {
 	s.Run("Ping ddb with valid connection settings", func() {
-		client := NewTestContainer().GetDdbClient()
-		ds := NewDurableStore(client)
+		container := NewTestContainer()
+		address := fmt.Sprintf("http://%s", container.address)
+		ds := NewDurableStore("localhost", &address)
 		err := ds.Ping(context.TODO())
 		s.Assert().NoError(err)
 	})

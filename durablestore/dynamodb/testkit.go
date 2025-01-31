@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+    "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
 	dockertest "github.com/ory/dockertest/v3"
@@ -82,22 +81,17 @@ func NewTestContainer() *TestContainer {
 }
 
 func (c TestContainer) GetDdbClient() *dynamodb.Client {
-	url := fmt.Sprintf("http://%s", c.address)
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion("localhost"),
-		config.WithEndpointResolver(aws.EndpointResolverFunc(
-			func(_, _ string) (aws.Endpoint, error) {
-				return aws.Endpoint{URL: url, SigningRegion: "localhost"}, nil
-			})),
-	)
-	if err != nil {
-		panic("Could not launch amazon/dynamodb-local container")
-	}
+    cfg, err := config.LoadDefaultConfig(context.TODO(),
+        config.WithRegion("us-east-1"), // Required region
+    )
+    if err != nil {
+        log.Fatalf("unable to load SDK config, %v", err)
+    }
 
-	// Create DynamoDB client
-	client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
-		o.Credentials = credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")
-	})
+    // Create an S3 client with the BaseEndpoint set to LocalStack
+    client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+        o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", c.address))
+    })
 
 	return client
 }

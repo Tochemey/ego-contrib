@@ -2,14 +2,36 @@ package dynamodb
 
 import (
 	"fmt"
-	"strconv"
 
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
+
+	"github.com/tochemey/ego/v3/egopb"
 )
+
+type StateItem struct {
+	PersistenceID string // Partition key
+	StatePayload  []byte
+	StateManifest string
+	Timestamp     int64
+}
+
+// ToDurableState convert row to durable state
+func (x StateItem) ToDurableState() (*egopb.DurableState, error) {
+	// unmarshal the event and the state
+	state, err := toProto(x.StateManifest, x.StatePayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal the durable state: %w", err)
+	}
+
+	return &egopb.DurableState{
+		PersistenceId:  x.PersistenceID,
+		ResultingState: state,
+		Timestamp:      x.Timestamp,
+	}, nil
+}
 
 // toProto converts a byte array given its manifest into a valid proto message
 func toProto(manifest string, bytea []byte) (*anypb.Any, error) {
@@ -28,14 +50,4 @@ func toProto(manifest string, bytea []byte) (*anypb.Any, error) {
 		return cast, nil
 	}
 	return nil, fmt.Errorf("failed to unpack message=%s", manifest)
-}
-
-func parseDynamoUint64(element types.AttributeValue) uint64 {
-	n, _ := strconv.ParseUint(element.(*types.AttributeValueMemberN).Value, 10, 64)
-	return n
-}
-
-func parseDynamoInt64(element types.AttributeValue) int64 {
-	n, _ := strconv.ParseInt(element.(*types.AttributeValueMemberN).Value, 10, 64)
-	return n
 }
