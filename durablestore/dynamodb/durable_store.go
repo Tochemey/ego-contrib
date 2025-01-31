@@ -66,7 +66,6 @@ func (d DynamoDurableStore) Ping(ctx context.Context) error {
 
 // WriteState persist durable state for a given persistenceID.
 func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
-
 	bytea, _ := proto.Marshal(state.GetResultingState())
 	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
 

@@ -7,12 +7,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// account is a test struct
-type account struct {
-	AccountID   string
-	AccountName string
-}
-
 // DynamodbTestSuite will run the Postgres tests
 type DynamodbTestSuite struct {
 	suite.Suite
@@ -29,7 +23,7 @@ func TestDynamodbTestSuite(t *testing.T) {
 	suite.Run(t, new(DynamodbTestSuite))
 }
 
-func (s *DynamodbTestSuite) TestConnect() {
+func (s *DynamodbTestSuite) TestPing() {
 	s.Run("Ping ddb with valid connection settings", func() {
 		client := NewTestContainer().GetDdbClient()
 		ds := NewDurableStore(client)

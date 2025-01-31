@@ -1,11 +1,11 @@
 package dynamodb
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
-	"context"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,7 +24,6 @@ type TestContainer struct {
 
 func NewTestContainer() *TestContainer {
 	// Create a new dockertest pool
-	fmt.Println("Launching dynamodb local")
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to Docker: %s", err)
@@ -58,7 +57,6 @@ func NewTestContainer() *TestContainer {
 			return err
 		}
 
-		fmt.Println("dynamodb local is ready")
 		return nil
 	}
 
@@ -85,16 +83,15 @@ func NewTestContainer() *TestContainer {
 
 func (c TestContainer) GetDdbClient() *dynamodb.Client {
 	url := fmt.Sprintf("http://%s", c.address)
-	fmt.Println(url)
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion("localhost"),
 		config.WithEndpointResolver(aws.EndpointResolverFunc(
-			func(service, region string) (aws.Endpoint, error) {
+			func(_, _ string) (aws.Endpoint, error) {
 				return aws.Endpoint{URL: url, SigningRegion: "localhost"}, nil
 			})),
 	)
 	if err != nil {
-		fmt.Println("failed to create localhost aws config")
+		panic("Could not launch amazon/dynamodb-local container")
 	}
 
 	// Create DynamoDB client

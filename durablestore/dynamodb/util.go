@@ -1,14 +1,14 @@
 package dynamodb
 
 import (
-	"strconv"
 	"fmt"
+	"strconv"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // toProto converts a byte array given its manifest into a valid proto message
