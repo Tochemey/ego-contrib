@@ -2,14 +2,11 @@ package dynamodb
 
 import (
 	"context"
+	"fmt"
 	"testing"
-	// "time"
 
-	// "github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
@@ -36,14 +33,10 @@ func TestDynamodbTestSuite(t *testing.T) {
 }
 
 func (s *DynamodbTestSuite) TestConnect() {
-	s.Run("with valid connection settings", func() {
-		cfg, err := config.LoadDefaultConfig(context.TODO())
-		client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
-			o.BaseEndpoint = aws.String(s.container.address+"assd")
-		})
-
+	s.Run("Ping ddb with valid connection settings", func() {
+		client := NewTestContainer().GetDdbClient()
 		ds := NewDurableStore(client)
-		ds.Ping(context.TODO())
+		err := ds.Ping(context.TODO())
 		s.Assert().NoError(err)
 	})
 }
