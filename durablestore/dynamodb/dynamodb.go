@@ -19,12 +19,13 @@ type database interface {
 }
 
 type ddb struct {
+	tableName string
 	client *dynamodb.Client
 }
 
 var _ database = (*ddb)(nil)
 
-func newDynamodb(region string, baseEndpoint *string) database {
+func newDynamodb(tableName, region string, baseEndpoint *string) database {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(region),
 	)
@@ -41,6 +42,7 @@ func newDynamodb(region string, baseEndpoint *string) database {
 
 	ddb := new(ddb)
 	ddb.client = client
+	ddb.tableName = tableName
 
 	return ddb
 }
@@ -51,7 +53,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceId string) (*StateItem, e
 	}
 
 	result, err := ddb.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(tableName),
+		TableName: aws.String(ddb.tableName),
 		Key:       key,
 	})
 	if err != nil {
@@ -73,12 +75,12 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceId string) (*StateItem, e
 
 func (ddb ddb) UpsertItem(ctx context.Context, item *StateItem) error {
 	_, err := ddb.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(tableName),
+		TableName: aws.String(ddb.tableName),
 		Item: map[string]types.AttributeValue{
 			"PersistenceID": &types.AttributeValueMemberS{Value: item.PersistenceID}, // Partition key
 			"StatePayload":  &types.AttributeValueMemberB{Value: item.StatePayload},
 			"StateManifest": &types.AttributeValueMemberS{Value: item.StateManifest},
-			"Timestamp":     &types.AttributeValueMemberS{Value: fmt.Sprintf("%d", item.Timestamp)},
+			"Timestamp":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", item.Timestamp)},
 		},
 	})
 	if err != nil {

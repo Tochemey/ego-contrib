@@ -2,8 +2,8 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -24,12 +24,21 @@ func TestDynamodbTestSuite(t *testing.T) {
 	suite.Run(t, new(DynamodbTestSuite))
 }
 
-func (s *DynamodbTestSuite) TestPing() {
-	s.Run("Ping ddb with valid connection settings", func() {
-		container := NewTestContainer()
-		address := fmt.Sprintf("http://%s", container.address)
-		ds := NewDurableStore("localhost", &address)
-		err := ds.Ping(context.TODO())
+func (s *DynamodbTestSuite) TestUpsert() {
+	s.Run("Upsert StateItem into DynamoDB and read back", func() {
+		ddb := NewTestContainer().GetDdbClient()
+		persistenceId := "account_1"
+		stateItem := &StateItem{
+			PersistenceID: persistenceId,
+			StatePayload:  []byte{},
+			StateManifest: "manifest",
+			Timestamp:     int64(time.Now().UnixNano()),
+		}
+		err := ddb.ddb.UpsertItem(context.Background(), stateItem)
+		s.Assert().NoError(err)
+
+		respItem, err := ddb.ddb.GetItem(context.Background(), persistenceId)
+		s.Assert().Equal(stateItem, respItem)
 		s.Assert().NoError(err)
 	})
 }

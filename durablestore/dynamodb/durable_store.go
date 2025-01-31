@@ -8,10 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	tableName = "states_store"
-)
-
 // DynamoDurableStore implements the DurableStore interface
 // and helps persist states in a DynamoDB
 type DynamoDurableStore struct {
@@ -21,9 +17,9 @@ type DynamoDurableStore struct {
 // enforce interface implementation
 var _ persistence.StateStore = (*DynamoDurableStore)(nil)
 
-func NewDurableStore(region string, baseEndpoint *string) *DynamoDurableStore {
+func NewDurableStore(tableName string, region string, baseEndpoint *string) *DynamoDurableStore {
 	return &DynamoDurableStore{
-		ddb: newDynamodb(region, baseEndpoint),
+		ddb: newDynamodb(tableName, region, baseEndpoint),
 	}
 }
 
