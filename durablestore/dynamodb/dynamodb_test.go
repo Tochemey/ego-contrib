@@ -2,12 +2,9 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 // account is a test struct
