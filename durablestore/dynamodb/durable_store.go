@@ -26,7 +26,7 @@ func NewDurableStore(tableName string, client *dynamodb.Client) *DynamoDurableSt
 
 // Connect connects to the journal store
 // No connection is needed because the client is stateless
-func (d DynamoDurableStore) Connect(_ context.Context) error {
+func (DynamoDurableStore) Connect(_ context.Context) error {
 	return nil
 }
 
@@ -38,16 +38,16 @@ func (DynamoDurableStore) Disconnect(_ context.Context) error {
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 // There is no need to ping because the client is stateless
-func (d DynamoDurableStore) Ping(_ context.Context) error {
+func (DynamoDurableStore) Ping(_ context.Context) error {
 	return nil
 }
 
 // WriteState persist durable state for a given persistenceID.
-func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
+func (s DynamoDurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
 	bytea, _ := proto.Marshal(state.GetResultingState())
 	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
 
-	return d.ddb.UpsertItem(ctx, &StateItem{
+	return s.ddb.UpsertItem(ctx, &StateItem{
 		PersistenceID: state.GetPersistenceId(),
 		VersionNumber: state.GetVersionNumber(),
 		StatePayload:  bytea,
@@ -58,8 +58,8 @@ func (d DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 }
 
 // GetLatestState fetches the latest durable state
-func (d DynamoDurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
-	result, err := d.ddb.GetItem(ctx, persistenceID)
+func (s DynamoDurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
+	result, err := s.ddb.GetItem(ctx, persistenceID)
 	if err != nil {
 		return nil, err
 	}
