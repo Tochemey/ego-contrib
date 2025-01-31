@@ -44,29 +44,21 @@ func NewTestContainer() *TestContainer {
 		log.Fatalf("Could not start resource: %s", err)
 	}
 
-	time.Sleep(5 * time.Second)
-
-	// Define the health check function
-	healthCheck := func() error {
+	if err = pool.Retry(func() error {
 		resp, err := http.Get(fmt.Sprintf("http://%s/", hostAndPort))
 		if err != nil {
-			log.Fatalf("Failed to make request: %v", err)
+			return err
 		}
 		defer resp.Body.Close()
 
-		// Check if the status code is 400
+		// Check if the status code is 400 which means the server is responding
 		if resp.StatusCode != http.StatusBadRequest {
 			return err
 		}
 
 		return nil
-	}
-
-	// Retry the health check until it succeeds or times out
-	if err := pool.Retry(func() error {
-		return healthCheck()
 	}); err != nil {
-		log.Fatalf("dynamodb local did not start in time: %s", err)
+		log.Fatalf("Could not connect to docker: %s", err)
 	}
 
 	// Tell docker to hard kill the container in 120 seconds
