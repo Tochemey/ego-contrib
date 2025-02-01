@@ -19,6 +19,7 @@ import (
 
 type TestContainer struct {
 	resource *dockertest.Resource
+	pool *dockertest.Pool
 	address  string
 }
 
@@ -67,22 +68,33 @@ func NewTestContainer() *TestContainer {
 
 	container := new(TestContainer)
 	container.resource = resource
+	container.pool = pool
 	container.address = hostAndPort
 
 	return container
 }
 
-func (c TestContainer) GetDurableStore() *DynamoDurableStore {
-	ctx := context.Background()
+func (c TestContainer) Cleanup() {
+	if err := c.pool.Purge(c.resource); err != nil {
+		log.Fatalf("Could not purge resource: %s", err)
+	}
+}
+
+func (c TestContainer) GetDdbClient(ctx context.Context) *dynamodb.Client {
 	cfg, _ := config.LoadDefaultConfig(ctx,
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")),
 		config.WithRegion("us-east-1"),
 	)
 
 	// Create an DynamoDB client with the BaseEndpoint set to DynamoDB Local
-	client := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
 		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", c.address))
 	})
+}
+
+func (c TestContainer) GetDurableStore() *DynamoDurableStore {
+	ctx := context.Background()
+	client := c.GetDdbClient(ctx)
 
 	tableName := "states_store"
 	store := NewDurableStore(tableName, client)
