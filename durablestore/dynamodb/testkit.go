@@ -73,7 +73,8 @@ func NewTestContainer() *TestContainer {
 }
 
 func (c TestContainer) GetDurableStore() *DynamoDurableStore {
-	cfg, _ := config.LoadDefaultConfig(context.Background(),
+	ctx := context.Background()
+	cfg, _ := config.LoadDefaultConfig(ctx,
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")),
 		config.WithRegion("us-east-1"),
 	)
@@ -85,12 +86,12 @@ func (c TestContainer) GetDurableStore() *DynamoDurableStore {
 
 	tableName := "states_store"
 	store := NewDurableStore(tableName, client)
-	c.CreateTable(tableName, client)
+	c.CreateTable(ctx, tableName, client)
 	return store
 }
 
-func (c TestContainer) CreateTable(tableName string, client *dynamodb.Client) error {
-	_, err := client.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
+func (c TestContainer) CreateTable(ctx context.Context, tableName string, client *dynamodb.Client) error {
+	_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName: aws.String(tableName),
 		AttributeDefinitions: []types.AttributeDefinition{
 			{

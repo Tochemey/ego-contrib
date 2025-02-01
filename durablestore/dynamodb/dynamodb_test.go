@@ -26,7 +26,7 @@ func TestDynamodbTestSuite(t *testing.T) {
 
 func (s *DynamodbTestSuite) TestUpsert() {
 	s.Run("Upsert StateItem into DynamoDB and read back", func() {
-		store := s.container.GetDdbStore()
+		store := s.container.GetDurableStore()
 		persistenceID := "account_1"
 		stateItem := &StateItem{
 			PersistenceID: persistenceID,
