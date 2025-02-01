@@ -47,7 +47,7 @@ func (s DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 	bytea, _ := proto.Marshal(state.GetResultingState())
 	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
 
-	return s.ddb.UpsertItem(ctx, &StateItem{
+	return s.ddb.UpsertItem(ctx, &item{
 		PersistenceID: state.GetPersistenceId(),
 		VersionNumber: state.GetVersionNumber(),
 		StatePayload:  bytea,

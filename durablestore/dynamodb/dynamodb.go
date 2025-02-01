@@ -12,9 +12,9 @@ import (
 
 type database interface {
 	// Upsert item in DynamoDB
-	UpsertItem(ctx context.Context, item *StateItem) error
+	UpsertItem(ctx context.Context, item *item) error
 	// Query data based on the key supplied in DynamoDB
-	GetItem(ctx context.Context, key string) (*StateItem, error)
+	GetItem(ctx context.Context, key string) (*item, error)
 }
 
 type ddb struct {
@@ -31,7 +31,7 @@ func newDynamodb(tableName string, client *dynamodb.Client) database {
 	}
 }
 
-func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, error) {
+func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*item, error) {
 	key := map[string]types.AttributeValue{
 		"PersistenceID": &types.AttributeValueMemberS{Value: persistenceID},
 	}
@@ -49,7 +49,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, e
 		return nil, nil
 	}
 
-	return &StateItem{
+	return &item{
 		PersistenceID: persistenceID,
 		VersionNumber: parseDynamoUint64(result.Item["VersionNumber"]),
 		StatePayload:  result.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
@@ -59,7 +59,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*StateItem, e
 	}, nil
 }
 
-func (ddb ddb) UpsertItem(ctx context.Context, item *StateItem) error {
+func (ddb ddb) UpsertItem(ctx context.Context, item *item) error {
 	_, err := ddb.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(ddb.tableName),
 		Item: map[string]types.AttributeValue{

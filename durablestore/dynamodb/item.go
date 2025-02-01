@@ -11,7 +11,7 @@ import (
 	"github.com/tochemey/ego/v3/egopb"
 )
 
-type StateItem struct {
+type item struct {
 	PersistenceID string // Partition key
 	VersionNumber uint64
 	StatePayload  []byte
@@ -21,7 +21,7 @@ type StateItem struct {
 }
 
 // ToDurableState convert row to durable state
-func (x StateItem) ToDurableState() (*egopb.DurableState, error) {
+func (x item) ToDurableState() (*egopb.DurableState, error) {
 	// unmarshal the event and the state
 	state, err := toProto(x.StateManifest, x.StatePayload)
 	if err != nil {
