@@ -5,6 +5,7 @@ go 1.23.4
 require (
 	github.com/aws/aws-sdk-go-v2 v1.35.0
 	github.com/aws/aws-sdk-go-v2/config v1.29.3
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.56
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.39.6
 	github.com/ory/dockertest/v3 v3.11.0
 	github.com/stretchr/testify v1.10.0
@@ -17,7 +18,6 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.17.56 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.26 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.30 // indirect
