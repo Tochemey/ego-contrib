@@ -19,7 +19,7 @@ import (
 
 type TestContainer struct {
 	resource *dockertest.Resource
-	pool *dockertest.Pool
+	pool     *dockertest.Pool
 	address  string
 }
 
