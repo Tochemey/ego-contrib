@@ -60,9 +60,13 @@ func (s DynamoDurableStore) WriteState(ctx context.Context, state *egopb.Durable
 // GetLatestState fetches the latest durable state
 func (s DynamoDurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
 	result, err := s.ddb.GetItem(ctx, persistenceID)
-	if err != nil {
+	switch {
+	case result == nil && err == nil:
+		return nil, nil
+	case err != nil:
 		return nil, err
+	default:
+		return result.ToDurableState()
 	}
-
-	return result.ToDurableState()
+}
 }
