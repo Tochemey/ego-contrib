@@ -40,13 +40,13 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*item, error)
 		TableName: aws.String(ddb.tableName),
 		Key:       key,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the latest state from the dynamodb: %w", err)
-	}
 
 	// Check if item exists
-	if result.Item == nil {
+	if result == nil {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch the latest state from the dynamodb: %w", err)
 	}
 
 	return &item{
