@@ -42,7 +42,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*item, error)
 	})
 
 	// Check if item exists
-	if result == nil {
+	if result.Item == nil {
 		return nil, nil
 	}
 	if err != nil {
