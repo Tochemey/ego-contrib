@@ -41,22 +41,21 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*item, error)
 		Key:       key,
 	})
 
-	// Check if item exists
-	if result.Item == nil {
-		return nil, nil
-	}
-	if err != nil {
+	switch {
+	case err != nil:
 		return nil, fmt.Errorf("failed to fetch the latest state from the dynamodb: %w", err)
+	case result.Item == nil:
+		return nil, nil
+	default:
+		return &item{
+			PersistenceID: persistenceID,
+			VersionNumber: parseDynamoUint64(result.Item["VersionNumber"]),
+			StatePayload:  result.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
+			StateManifest: result.Item["StateManifest"].(*types.AttributeValueMemberS).Value,
+			Timestamp:     parseDynamoInt64(result.Item["Timestamp"]),
+			ShardNumber:   parseDynamoUint64(result.Item["ShardNumber"]),
+		}, nil
 	}
-
-	return &item{
-		PersistenceID: persistenceID,
-		VersionNumber: parseDynamoUint64(result.Item["VersionNumber"]),
-		StatePayload:  result.Item["StatePayload"].(*types.AttributeValueMemberB).Value,
-		StateManifest: result.Item["StateManifest"].(*types.AttributeValueMemberS).Value,
-		Timestamp:     parseDynamoInt64(result.Item["Timestamp"]),
-		ShardNumber:   parseDynamoUint64(result.Item["ShardNumber"]),
-	}, nil
 }
 
 func (ddb ddb) UpsertItem(ctx context.Context, item *item) error {
