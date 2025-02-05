@@ -43,7 +43,7 @@ func (ddb ddb) GetItem(ctx context.Context, persistenceID string) (*item, error)
 
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("failed to fetch the latest state from the dynamodb: %w", err)
+		return nil, fmt.Errorf("failed to fetch the state from the dynamodb: %w", err)
 	case result.Item == nil:
 		return nil, nil
 	default:
