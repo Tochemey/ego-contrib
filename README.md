@@ -10,13 +10,13 @@ Plug any module into eGo’s persistence APIs and mix durable state, event journ
 
 | Category | Backend | Highlights | Documentation |
 |----------|---------|------------|---------------|
-| 💾 Durable State | Memory 🧠 | Zero-dependency snapshots for tests and prototypes | [README](./durablestore/memory/README.md) |
-| 💾 Durable State | PostgreSQL 🐘 | `pgx` snapshots with `INSERT … ON CONFLICT` upserts | [README](./durablestore/postgres/README.md) · [Schema](./durablestore/postgres/resources/durablestore_postgres.sql) |
-| 💾 Durable State | Amazon DynamoDB ☁️ | Serverless persistence via AWS SDK v2 | [README](./durablestore/dynamodb/README.md) |
-| 📜 Event Store | Memory 🧪 | HashiCorp `memdb` journal for event-sourced tests | [README](./eventstore/memory/README.md) |
-| 📜 Event Store | PostgreSQL 🐘 | Batched inserts and fast replay queries (`pgx`) | [README](./eventstore/postgres/README.md) · [Schema](./eventstore/postgres/resources/eventstore_postgres.sql) |
-| ⏱️ Offset Store | Memory ⚡ | In-memory projection offsets with `memdb` | [README](./offsetstore/memory/README.md) |
-| ⏱️ Offset Store | PostgreSQL 🐘 | Transactional offset management on RDBMS | [README](./offsetstore/postgres/README.md) · [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql) |
+| Durable State | Memory | Zero-dependency snapshots for tests and prototypes | [README](./durablestore/memory/README.md) |
+| Durable State | PostgreSQL | `pgx` snapshots with `INSERT … ON CONFLICT` upserts | [README](./durablestore/postgres/README.md) · [Schema](./durablestore/postgres/resources/durablestore_postgres.sql) |
+| Durable State | Amazon DynamoDB | Serverless persistence via AWS SDK v2 | [README](./durablestore/dynamodb/README.md) |
+| Event Store | Memory | HashiCorp `memdb` journal for event-sourced tests | [README](./eventstore/memory/README.md) |
+| Event Store | PostgreSQL | Batched inserts and fast replay queries (`pgx`) | [README](./eventstore/postgres/README.md) · [Schema](./eventstore/postgres/resources/eventstore_postgres.sql) |
+| Offset Store | Memory | In-memory projection offsets with `memdb` | [README](./offsetstore/memory/README.md) |
+| Offset Store | PostgreSQL | Transactional offset management on RDBMS | [README](./offsetstore/postgres/README.md) · [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql) |
 
 > 🤗 Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-contrib/issues/new) or propose one—contributions welcome!
 
