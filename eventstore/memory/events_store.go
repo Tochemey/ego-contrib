@@ -33,14 +33,13 @@ import (
 	goset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-memdb"
+	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v3/persistence"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
-
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
 )
 
 // EventsStore keep in memory every journal
@@ -294,7 +293,7 @@ func (s *EventsStore) DeleteEvents(_ context.Context, persistenceID string, toSe
 }
 
 // ReplayEvents fetches events for a given persistence ID from a given sequence number(inclusive) to a given sequence number(inclusive)
-func (s *EventsStore) ReplayEvents(_ context.Context, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, max uint64) ([]*egopb.Event, error) {
+func (s *EventsStore) ReplayEvents(_ context.Context, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) {
 	// check whether this instance of the journal is connected or not
 	if !s.connected.Load() {
 		return nil, errors.New("journal store is not connected")
@@ -339,7 +338,7 @@ func (s *EventsStore) ReplayEvents(_ context.Context, persistenceID string, from
 				return nil, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 			}
 
-			if uint64(len(events)) <= max {
+			if uint64(len(events)) <= limit {
 				// create the event and add it to the list of events
 				events = append(events, &egopb.Event{
 					PersistenceId:  journal.PersistenceID,
@@ -414,7 +413,7 @@ func (s *EventsStore) GetLatestEvent(_ context.Context, persistenceID string) (*
 }
 
 // GetShardEvents returns the next (max) events after the offset in the journal for a given shard
-func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offset int64, max uint64) ([]*egopb.Event, int64, error) {
+func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
 	// check whether this instance of the journal is connected or not
 	if !s.connected.Load() {
 		return nil, 0, errors.New("journal store is not connected")
@@ -464,7 +463,7 @@ func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offs
 				return nil, 0, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 			}
 
-			if uint64(len(events)) <= max {
+			if uint64(len(events)) <= limit {
 				// create the event and add it to the list of events
 				events = append(events, &egopb.Event{
 					PersistenceId:  journal.PersistenceID,

@@ -39,6 +39,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// nolint
 func TestEventsStore(t *testing.T) {
 	t.Run("testNew", func(t *testing.T) {
 		eventsStore := NewEventsStore()

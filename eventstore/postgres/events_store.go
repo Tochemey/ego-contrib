@@ -291,7 +291,7 @@ func (s *EventsStore) DeleteEvents(ctx context.Context, persistenceID string, to
 }
 
 // ReplayEvents fetches events for a given persistence ID from a given sequence number(inclusive) to a given sequence number(inclusive)
-func (s *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, max uint64) ([]*egopb.Event, error) {
+func (s *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) {
 	// check whether this instance of the journal is connected or not
 	if !s.connected.Load() {
 		return nil, errors.New("journal store is not connected")
@@ -305,7 +305,7 @@ func (s *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fr
 		Where(sq.GtOrEq{"sequence_number": fromSequenceNumber}).
 		Where(sq.LtOrEq{"sequence_number": toSequenceNumber}).
 		OrderBy("sequence_number ASC").
-		Limit(max)
+		Limit(limit)
 
 	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
@@ -362,7 +362,7 @@ func (s *EventsStore) GetLatestEvent(ctx context.Context, persistenceID string) 
 }
 
 // GetShardEvents returns the next (max) events after the offset in the journal for a given shard
-func (s *EventsStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, max uint64) ([]*egopb.Event, int64, error) {
+func (s *EventsStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
 	// check whether this instance of the journal is connected or not
 	if !s.connected.Load() {
 		return nil, 0, errors.New("journal store is not connected")
@@ -375,7 +375,7 @@ func (s *EventsStore) GetShardEvents(ctx context.Context, shardNumber uint64, of
 		Where(sq.Eq{"shard_number": shardNumber}).
 		Where(sq.Gt{"timestamp": offset}).
 		OrderBy("timestamp ASC").
-		Limit(max)
+		Limit(limit)
 
 	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()

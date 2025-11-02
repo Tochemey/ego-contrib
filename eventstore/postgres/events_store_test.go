@@ -39,6 +39,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// nolint
 func TestPostgresEventsStore(t *testing.T) {
 	t.Run("testNewEventsStore", func(t *testing.T) {
 		config := &Config{
