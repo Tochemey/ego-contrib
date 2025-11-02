@@ -3,7 +3,7 @@
 [![build](https://img.shields.io/github/actions/workflow/status/Tochemey/ego-contrib/build.yml?branch=main)](https://github.com/Tochemey/ego-contrib/actions/workflows/build.yml)
 [![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/tochemey/ego-contrib)](https://go.dev/doc/install)
 
-Collection of community-maintained storage backends and tooling for the [eGo actor framework](https://github.com/Tochemey/ego). Each module plugs into eGo’s persistence APIs so you can mix and match durable state, event journals, and projection offset stores without rewriting infrastructure code.
+Collection of community-maintained storage backends and tooling for the [eGo framework](https://github.com/Tochemey/ego). Each module plugs into eGo’s persistence APIs so you can mix and match durable state, event journals, and projection offset stores without rewriting infrastructure code.
 
 ## Available Modules
 
