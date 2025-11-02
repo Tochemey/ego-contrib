@@ -1,7 +1,8 @@
 # Durable State Store (Memory Backend)
 
 ## Overview
-This module supplies an in-memory implementation of eGo's `persistence.StateStore` interface. It is perfect for unit tests, demonstrations, and small prototypes where you do not need persistence across process restarts.
+This module supplies an in-memory implementation of [eGo](https://github.com/Tochemey/ego)'s `persistence.StateStore` interface. 
+It is perfect for unit tests, demonstrations, and small prototypes where you do not need persistence across process restarts.
 
 ## Features
 - Fully satisfies `github.com/tochemey/ego/v3/persistence.StateStore`

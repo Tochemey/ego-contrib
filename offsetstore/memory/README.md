@@ -1,7 +1,8 @@
 # Offset Store (Memory Backend)
 
 ## Overview
-This module provides an in-memory implementation of eGo's projection offset store. It satisfies `github.com/tochemey/ego/v3/offsetstore.OffsetStore` and is best suited for tests or quick prototypes where resetting progress between runs is acceptable.
+This module provides an in-memory implementation of [eGo](https://github.com/Tochemey/ego)'s projection offset store. 
+It satisfies `github.com/tochemey/ego/v3/offsetstore.OffsetStore` and is best suited for tests or quick prototypes where resetting progress between runs is acceptable.
 
 ## Features
 - Implements `WriteOffset`, `GetCurrentOffset`, and `ResetOffset`

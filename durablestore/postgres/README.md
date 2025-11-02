@@ -1,7 +1,8 @@
 # Durable State Store (PostgreSQL)
 
 ## Overview
-This module wires eGo's durable state API to PostgreSQL. It uses `github.com/jackc/pgx/v5` with a small connection pool and persists snapshots in the `states_store` table, keeping both the serialized protobuf payload and its manifest so the actor state can be rebuilt when requested.
+This module wires [eGo](https://github.com/Tochemey/ego)'s durable state API to PostgreSQL. 
+It uses `github.com/jackc/pgx/v5` with a small connection pool and persists snapshots in the `states_store` table, keeping both the serialized protobuf payload and its manifest so the actor state can be rebuilt when requested.
 
 ## Features
 - Implements `github.com/tochemey/ego/v3/persistence.StateStore`

@@ -1,7 +1,8 @@
 # Events Store (Memory Backend)
 
 ## Overview
-This module implements eGo's event journal on top of HashiCorp's in-memory `memdb`. It satisfies the `github.com/tochemey/ego/v3/persistence.EventsStore` interface and is ideal for unit tests, lightweight benchmarks, and prototypes where durability is not required.
+This module implements [eGo](https://github.com/Tochemey/ego)'s event journal on top of HashiCorp's in-memory `memdb`. 
+It satisfies the `github.com/tochemey/ego/v3/persistence.EventsStore` interface and is ideal for unit tests, lightweight benchmarks, and prototypes where durability is not required.
 
 ## Features
 - Full implementation of the EventsStore contract: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `GetShardEvents`, `ShardNumbers`, and more

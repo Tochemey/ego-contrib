@@ -1,7 +1,8 @@
 # Offset Store (PostgreSQL)
 
 ## Overview
-This package backs eGo projection offsets with PostgreSQL. It fulfils `github.com/tochemey/ego/v3/offsetstore.OffsetStore`, managing per-projection, per-shard offsets in a single table while handling the protobuf plumbing for you.
+This package backs [eGo](https://github.com/Tochemey/ego) projection offsets with PostgreSQL. 
+It fulfils `github.com/tochemey/ego/v3/offsetstore.OffsetStore`, managing per-projection, per-shard offsets in a single table while handling the protobuf plumbing for you.
 
 ## Features
 - Implements the complete OffsetStore contract (`WriteOffset`, `GetCurrentOffset`, `ResetOffset`, `Ping`, lifecycle methods)

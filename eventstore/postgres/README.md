@@ -1,7 +1,8 @@
 # Events Store (PostgreSQL)
 
 ## Overview
-This module persists eGo event journals to PostgreSQL. It implements `github.com/tochemey/ego/v3/persistence.EventsStore`, batches inserts with `github.com/Masterminds/squirrel`, and relies on `github.com/jackc/pgx/v5` for efficient I/O.
+This module persists [eGo](https://github.com/Tochemey/ego) event journals to PostgreSQL. 
+It implements `github.com/tochemey/ego/v3/persistence.EventsStore`, batches inserts with `github.com/Masterminds/squirrel`, and relies on `github.com/jackc/pgx/v5` for efficient I/O.
 
 ## Features
 - Complete EventsStore implementation: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `DeleteEvents`, `GetShardEvents`, `ShardNumbers`
