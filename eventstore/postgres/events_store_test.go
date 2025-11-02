@@ -31,13 +31,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v3/persistence"
+	"github.com/tochemey/ego/v3/test/data/testpb"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
-	testpb "github.com/tochemey/ego/v3/test/data/pb/v3"
 )
 
 func TestPostgresEventsStore(t *testing.T) {

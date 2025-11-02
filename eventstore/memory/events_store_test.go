@@ -31,20 +31,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v3/persistence"
+	"github.com/tochemey/ego/v3/test/data/testpb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
-	testpb "github.com/tochemey/ego/v3/test/data/pb/v3"
 )
 
 func TestEventsStore(t *testing.T) {
 	t.Run("testNew", func(t *testing.T) {
 		eventsStore := NewEventsStore()
 		assert.NotNil(t, eventsStore)
-		var p interface{} = eventsStore
+		var p any = eventsStore
 		_, ok := p.(persistence.EventsStore)
 		assert.True(t, ok)
 	})

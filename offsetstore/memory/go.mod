@@ -1,14 +1,14 @@
 module github.com/tochemey/ego-contrib/offsetstore/memory
 
-go 1.22.0
+go 1.25.3
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/hashicorp/go-memdb v1.3.4
-	github.com/stretchr/testify v1.10.0
-	github.com/tochemey/ego/v3 v3.2.1
+	github.com/hashicorp/go-memdb v1.3.5
+	github.com/stretchr/testify v1.11.1
+	github.com/tochemey/ego/v3 v3.5.4
 	go.uber.org/atomic v1.11.0
-	google.golang.org/protobuf v1.36.1
+	google.golang.org/protobuf v1.36.10
 )
 
 require (
