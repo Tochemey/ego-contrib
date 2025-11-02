@@ -1,7 +1,7 @@
 # Durable State Store (Amazon DynamoDB)
 
 ## Overview
-This module persists durable state for eGo actors on top of Amazon DynamoDB. It fulfils the `github.com/tochemey/ego/v3/persistence.StateStore` contract and stores both the serialized state payload and its protobuf manifest so a snapshot can be reconstructed later.
+This module persists durable state for eGo on top of Amazon DynamoDB. It fulfils the `github.com/tochemey/ego/v3/persistence.StateStore` contract and stores both the serialized state payload and its protobuf manifest so a snapshot can be reconstructed later.
 
 ## Features
 - Stateless design: `Connect`, `Disconnect`, and `Ping` are inexpensive no-ops
