@@ -22,29 +22,23 @@
  * SOFTWARE.
  */
 
-package dynamodb
+package cassandra
 
 import (
-	"context"
-	"fmt"
 	"log"
-	"net/http"
+	"os"
 	"time"
 
+	gocql "github.com/apache/cassandra-gocql-driver/v2"
 	dockertest "github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 type TestContainer struct {
 	resource *dockertest.Resource
 	pool     *dockertest.Pool
 	address  string
+	keyspace string
 }
 
 func NewTestContainer() *TestContainer {
@@ -54,46 +48,50 @@ func NewTestContainer() *TestContainer {
 		log.Fatalf("Could not connect to Docker: %s", err)
 	}
 
-	// Run a DynamoDB local container
+	// Run a Cassandra container
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "amazon/dynamodb-local",
-		Tag:        "3.1.0",
+		Repository: "cassandra",
+		Tag:        "5.0.6",
+		Env: []string{
+			"MAX_HEAP_SIZE=1G",  // Set the maximum heap size to 1GB
+			"HEAP_NEWSIZE=256M", // Set the new heap size to 256MB
+			"CASSANDRA_CLUSTER_NAME=test",
+			"CASSANDRA_DC=dc1",
+			"CASSANDRA_RACK=rack1",
+		},
 	}, func(config *docker.HostConfig) {
 		// set AutoRemove to true so that stopped container goes away by itself
 		config.AutoRemove = true
 		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
 	})
-	hostAndPort := resource.GetHostPort("8000/tcp")
-
 	if err != nil {
 		log.Fatalf("Could not start resource: %s", err)
 	}
 
+	hostAndPort := resource.GetHostPort("9042/tcp")
+
 	if err = pool.Retry(func() error {
-		resp, err := http.Get(fmt.Sprintf("http://%s/", hostAndPort))
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		// Check if the status code is 400 which means the server is responding
-		if resp.StatusCode != http.StatusBadRequest {
-			return err
-		}
-
-		return nil
+		// Try to connect to the Cassandra container
+		// to make sure the server is ready
+		_, err := getCassandraClient(hostAndPort, "")
+		return err
 	}); err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 
-	// Tell docker to hard kill the container in 120 seconds
+	// Tell docker to hard kill the container in 300 seconds
 	_ = resource.Expire(300)
-	pool.MaxWait = 120 * time.Second
 
 	container := new(TestContainer)
 	container.resource = resource
 	container.pool = pool
 	container.address = hostAndPort
+	container.keyspace = "test_keyspace"
+
+	err = container.CreateKeyspaceAndTable()
+	if err != nil {
+		log.Fatalf("Could not create keyspace and table: %s", err)
+	}
 
 	return container
 }
@@ -104,45 +102,65 @@ func (c TestContainer) Cleanup() {
 	}
 }
 
-func (c TestContainer) GetDdbClient(ctx context.Context) *dynamodb.Client {
-	cfg, _ := config.LoadDefaultConfig(ctx,
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("fakekey", "fakesecret", "")),
-		config.WithRegion("us-east-1"),
-	)
+func getCassandraClient(address string, keyspace string) (*gocql.Session, error) {
+	cluster := gocql.NewCluster(address)
+	if keyspace != "" {
+		cluster.Keyspace = keyspace
+	}
+	cluster.Timeout = 60 * time.Second
+	cluster.Consistency = gocql.LocalOne
+	session, err := cluster.CreateSession()
+	if err != nil {
+		return nil, err
+	}
+	return session, nil
+}
 
-	// Create an DynamoDB client with the BaseEndpoint set to DynamoDB Local
-	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
-		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", c.address))
+func (c TestContainer) GetDurableStore() *DurableStore {
+	return NewDurableStore(&Config{
+		Cluster:     c.address,
+		Keyspace:    c.keyspace,
+		Consistency: gocql.LocalOne,
 	})
 }
 
-func (c TestContainer) GetDurableStore() *DynamoDurableStore {
-	ctx := context.Background()
-	client := c.GetDdbClient(ctx)
+func (c TestContainer) CreateKeyspaceAndTable() error {
+	// create a keyspace
+	session, err := getCassandraClient(c.address, "")
+	if err != nil {
+		log.Fatalf("Could not get Cassandra client: %s", err)
+		return err
+	}
 
-	tableName := "states_store"
-	store := NewDurableStore(tableName, client)
-	c.CreateTable(ctx, tableName, client)
-	return store
-}
+	err = session.Query(`CREATE KEYSPACE IF NOT EXISTS test_keyspace
+WITH replication = {
+  'class': 'SimpleStrategy',
+  'replication_factor': 1
+};`).Exec()
+	if err != nil {
+		log.Fatalf("Could not create keyspace: %s", err)
+		return err
+	}
+	session.Close()
 
-func (c TestContainer) CreateTable(ctx context.Context, tableName string, client *dynamodb.Client) error {
-	_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
-		TableName: aws.String(tableName),
-		AttributeDefinitions: []types.AttributeDefinition{
-			{
-				AttributeName: aws.String("PersistenceID"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-		},
-		KeySchema: []types.KeySchemaElement{
-			{
-				AttributeName: aws.String("PersistenceID"),
-				KeyType:       types.KeyTypeHash,
-			},
-		},
-		BillingMode: types.BillingModePayPerRequest,
-	})
+	migration, err := os.ReadFile("resources/states_store.sql")
+	if err != nil {
+		log.Fatalf("Could not read migration file: %s", err)
+	}
 
-	return err
+	// create a table on the keyspace
+	session, err = getCassandraClient(c.address, c.keyspace)
+	if err != nil {
+		log.Fatalf("Could not get Cassandra client: %s", err)
+		return err
+	}
+
+	err = session.Query(string(migration)).Exec()
+	if err != nil {
+		log.Fatalf("Could not create table: %s", err)
+		return err
+	}
+	session.Close()
+
+	return nil
 }

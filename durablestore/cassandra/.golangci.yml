@@ -1,0 +1,61 @@
+version: "2"
+run:
+  concurrency: 4
+  issues-exit-code: 2
+  tests: true
+  modules-download-mode: vendor
+  relative-path-mode: gomod
+output:
+  path-prefix: ""
+linters:
+  default: none
+  enable:
+    - gocyclo
+    - gosec
+    - misspell
+    - revive
+    - staticcheck
+    - whitespace
+    - govet
+  settings:
+    gosec:
+      excludes:
+        - G115
+    misspell:
+      locale: US
+      ignore-rules:
+        - cancelled
+        - behaviour
+        - initialised
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - revive
+        path: _test\.go
+        text: context.Context should be the first parameter of a function
+      - linters:
+          - revive
+        path: _test\.go
+        text: exported func.*returns unexported type.*which can be annoying to use
+    paths:
+      - mocks
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - mocks
+      - third_party$
+      - builtin$
+      - examples$
