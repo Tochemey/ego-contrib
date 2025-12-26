@@ -47,6 +47,7 @@ func NewTestContainer() *TestContainer {
 	if err != nil {
 		log.Fatalf("Could not connect to Docker: %s", err)
 	}
+	pool.MaxWait = 300 * time.Second
 
 	// Run a Cassandra container
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{

@@ -54,7 +54,7 @@ func NewDurableStore(config *Config) *DurableStore {
 
 // Connect connects to the journal store
 // No connection is needed because the client is stateless
-func (s *DurableStore) Connect(ctx context.Context) error {
+func (s *DurableStore) Connect(_ context.Context) error {
 	if s.connected.Load() {
 		return nil
 	}
@@ -71,7 +71,7 @@ func (s *DurableStore) Connect(ctx context.Context) error {
 
 // Disconnect disconnect the journal store
 // There is no need to disconnect because the client is stateless
-func (s *DurableStore) Disconnect(ctx context.Context) error {
+func (s *DurableStore) Disconnect(_ context.Context) error {
 	if !s.connected.Load() {
 		return nil
 	}
@@ -96,7 +96,7 @@ func (s *DurableStore) Ping(ctx context.Context) error {
 }
 
 // WriteState persist durable state for a given persistenceID.
-func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
+func (s *DurableStore) WriteState(_ context.Context, state *egopb.DurableState) error {
 	bytea, err := proto.Marshal(state.GetResultingState())
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState
 }
 
 // GetLatestState fetches the latest durable state
-func (s *DurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
+func (s *DurableStore) GetLatestState(_ context.Context, persistenceID string) (*egopb.DurableState, error) {
 	result, err := s.cluster.GetLatestState(persistenceID)
 	if result == nil {
 		return nil, nil

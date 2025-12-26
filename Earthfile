@@ -18,6 +18,7 @@ test:
 		BUILD --allow-privileged ./eventstore/memory+test
 		BUILD --allow-privileged ./eventstore/postgres+test
 		BUILD --allow-privileged ./durablestore/dynamodb+test
+		BUILD --allow-privileged ./durablestore/cassandra+test
 		BUILD --allow-privileged ./durablestore/postgres+test
 		BUILD --allow-privileged ./durablestore/memory+test
 		BUILD --allow-privileged ./offsetstore/memory+test
