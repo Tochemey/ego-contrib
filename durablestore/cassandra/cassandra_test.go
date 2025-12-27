@@ -127,6 +127,56 @@ func (s *CassandraTestSuite) TestUpsert() {
 		s.Assert().NoError(err)
 	})
 
+	s.Run("Upsert multiple version of DurableState into Cassandra and read back", func() {
+		persistenceID := "account_1"
+		state1, err := anypb.New(&testpb.Account{
+			AccountId:      "123",
+			AccountBalance: 1,
+		})
+		s.Assert().NoError(err)
+
+		ctx := context.Background()
+		durableState1 := &egopb.DurableState{
+			PersistenceId:  persistenceID,
+			VersionNumber:  1,
+			ResultingState: state1,
+			Timestamp:      int64(time.Now().UnixNano()),
+			Shard:          1,
+		}
+
+		store := s.container.GetDurableStore()
+		s.Assert().NotNil(store)
+		err = store.Connect(ctx)
+		s.Assert().NoError(err)
+		err = store.WriteState(ctx, durableState1)
+		s.Assert().NoError(err)
+
+		respItem, err := store.GetLatestState(ctx, persistenceID)
+		proto.Equal(durableState1, respItem)
+		s.Assert().NoError(err)
+
+		state1, err = anypb.New(&testpb.Account{
+			AccountId:      "123",
+			AccountBalance: 2,
+		})
+		s.Assert().NoError(err)
+		durableState2 := &egopb.DurableState{
+			PersistenceId:  persistenceID,
+			VersionNumber:  2,
+			ResultingState: state1,
+			Timestamp:      int64(time.Now().UnixNano()),
+			Shard:          1,
+		}
+
+		s.Assert().NoError(err)
+		err = store.WriteState(ctx, durableState2)
+		s.Assert().NoError(err)
+
+		respItem, err = store.GetLatestState(ctx, persistenceID)
+		proto.Equal(durableState2, respItem)
+		s.Assert().NoError(err)
+	})
+
 	s.Run("Read non-existent state", func() {
 		ctx := context.Background()
 
