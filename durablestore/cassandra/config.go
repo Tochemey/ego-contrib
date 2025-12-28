@@ -22,49 +22,13 @@
  * SOFTWARE.
  */
 
-package dynamodb
+package cassandra
 
-import (
-	"context"
-	"testing"
-	"time"
+import gocql "github.com/apache/cassandra-gocql-driver/v2"
 
-	"github.com/stretchr/testify/suite"
-)
-
-// DynamodbTestSuite will run the DynamoDB tests
-type DynamodbTestSuite struct {
-	suite.Suite
-	container *TestContainer
-}
-
-// SetupSuite starts the DynamoDB local container and set the container
-// host and port to use in the tests
-func (s *DynamodbTestSuite) SetupSuite() {
-	s.container = NewTestContainer()
-}
-
-func TestDynamodbTestSuite(t *testing.T) {
-	suite.Run(t, new(DynamodbTestSuite))
-}
-
-func (s *DynamodbTestSuite) TestUpsert() {
-	s.Run("Upsert StateItem into DynamoDB and read back", func() {
-		store := s.container.GetDurableStore()
-		persistenceID := "account_1"
-		stateItem := &item{
-			PersistenceID: persistenceID,
-			VersionNumber: 1,
-			StatePayload:  []byte{},
-			StateManifest: "manifest",
-			Timestamp:     int64(time.Now().UnixNano()),
-			ShardNumber:   1,
-		}
-		err := store.ddb.UpsertItem(context.Background(), stateItem)
-		s.Assert().NoError(err)
-
-		respItem, err := store.ddb.GetItem(context.Background(), persistenceID)
-		s.Assert().Equal(stateItem, respItem)
-		s.Assert().NoError(err)
-	})
+// Config defines the cassandra durable store configuration
+type Config struct {
+	Cluster     string            // Cluster represents the cassandra cluster
+	Keyspace    string            // Keyspace represents the cassandra keyspace
+	Consistency gocql.Consistency // Consistency represents the cassandra consistency
 }

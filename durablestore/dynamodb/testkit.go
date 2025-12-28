@@ -57,7 +57,7 @@ func NewTestContainer() *TestContainer {
 	// Run a DynamoDB local container
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "amazon/dynamodb-local",
-		Tag:        "2.5.4",
+		Tag:        "3.1.0",
 	}, func(config *docker.HostConfig) {
 		// set AutoRemove to true so that stopped container goes away by itself
 		config.AutoRemove = true

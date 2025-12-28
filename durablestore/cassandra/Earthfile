@@ -44,7 +44,7 @@ lint:
 local-test:
     FROM +vendor
 
-    WITH DOCKER --pull amazon/dynamodb-local:3.1.0
+    WITH DOCKER --pull cassandra:5.0.6
         RUN go test -v -mod=vendor ./...  -timeout 0 -race -v  -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
     END
 
