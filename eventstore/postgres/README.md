@@ -8,7 +8,6 @@ It implements `github.com/tochemey/ego/v3/persistence.EventsStore`, batches inse
 - Complete EventsStore implementation: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `DeleteEvents`, `GetShardEvents`, `ShardNumbers`
 - Batched inserts (default chunk size: 500 events) to avoid PostgreSQL's parameter limit
 - Query helpers that return nil slices when no data is found, simplifying upstream logic
-- Utility packages (`schema_utils.go`, `testkit.go`) for integration testing with Dockertest
 - Supports schema-qualified tables through `Config.DBSchema`
 
 ## Schema
@@ -124,7 +123,7 @@ func main() {
 
 ## Testing
 - `go test ./...` exercises the full suite
-- `eventstore/postgres/testkit.go` launches PostgreSQL via Dockertest and offers helpers like `SchemaUtils`
+- `eventstore/postgres/helper_test.go` launches PostgreSQL via Testcontainers-Go and offers helpers like `SchemaUtils`
 - The repository-level `earthly +test` target runs all module tests if you already rely on Earthly
 
 ## Operational Notes

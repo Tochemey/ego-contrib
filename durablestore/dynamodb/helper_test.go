@@ -28,6 +28,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -36,70 +37,55 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	dockertest "github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
+	testcontainers "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 type TestContainer struct {
-	resource *dockertest.Resource
-	pool     *dockertest.Pool
-	address  string
+	container testcontainers.Container
+	address   string
 }
 
 func NewTestContainer() *TestContainer {
-	// Create a new dockertest pool
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to Docker: %s", err)
-	}
-
-	// Run a DynamoDB local container
-	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "amazon/dynamodb-local",
-		Tag:        "3.1.0",
-	}, func(config *docker.HostConfig) {
-		// set AutoRemove to true so that stopped container goes away by itself
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
+	ctx := context.Background()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "amazon/dynamodb-local:3.1.0",
+			ExposedPorts: []string{"8000/tcp"},
+			WaitingFor: wait.ForHTTP("/").
+				WithPort("8000/tcp").
+				WithStatusCodeMatcher(func(status int) bool {
+					return status == http.StatusBadRequest
+				}).
+				WithStartupTimeout(120 * time.Second),
+		},
+		Started: true,
 	})
-	hostAndPort := resource.GetHostPort("8000/tcp")
-
 	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
+		log.Fatalf("Could not start container: %s", err)
 	}
 
-	if err = pool.Retry(func() error {
-		resp, err := http.Get(fmt.Sprintf("http://%s/", hostAndPort))
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		// Check if the status code is 400 which means the server is responding
-		if resp.StatusCode != http.StatusBadRequest {
-			return err
-		}
-
-		return nil
-	}); err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+	host, err := container.Host(ctx)
+	if err != nil {
+		log.Fatalf("Could not get container host: %s", err)
 	}
+	mappedPort, err := container.MappedPort(ctx, "8000/tcp")
+	if err != nil {
+		log.Fatalf("Could not get container port: %s", err)
+	}
+	hostAndPort := net.JoinHostPort(host, mappedPort.Port())
 
-	// Tell docker to hard kill the container in 120 seconds
-	_ = resource.Expire(300)
-	pool.MaxWait = 120 * time.Second
+	containerInstance := new(TestContainer)
+	containerInstance.container = container
+	containerInstance.address = hostAndPort
 
-	container := new(TestContainer)
-	container.resource = resource
-	container.pool = pool
-	container.address = hostAndPort
-
-	return container
+	return containerInstance
 }
 
 func (c TestContainer) Cleanup() {
-	if err := c.pool.Purge(c.resource); err != nil {
-		log.Fatalf("Could not purge resource: %s", err)
+	ctx := context.Background()
+	if err := c.container.Terminate(ctx); err != nil {
+		log.Fatalf("Could not terminate container: %s", err)
 	}
 }
 

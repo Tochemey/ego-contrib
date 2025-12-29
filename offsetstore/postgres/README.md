@@ -8,7 +8,6 @@ It fulfils `github.com/tochemey/ego/v3/offsetstore.OffsetStore`, managing per-pr
 - Implements the complete OffsetStore contract (`WriteOffset`, `GetCurrentOffset`, `ResetOffset`, `Ping`, lifecycle methods)
 - Transactional delete-and-insert semantics guarantee a single row per projection/shard pair
 - Uses `pgxpool` under the hood with safe default connection settings
-- Companion utilities (`internal/testkit.go`, `schema_utils.go`) simplify integration testing with Dockertest
 - Schema-qualified deployments via `Config.DBSchema`
 
 ## Schema
@@ -91,7 +90,7 @@ func main() {
 
 ## Testing
 - Run all module tests: `go test ./...`
-- Use `offsetstore/postgres/internal/testkit.go` to spin up PostgreSQL via Dockertest when writing integration suites
+- Use `offsetstore/postgres/internal/testkit.go` to spin up PostgreSQL via Testcontainers-Go when writing integration suites
 - Earthly users can execute the repository target: `earthly +test`
 
 ## Operational Notes

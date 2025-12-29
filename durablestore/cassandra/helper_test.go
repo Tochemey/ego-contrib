@@ -25,81 +25,75 @@
 package cassandra
 
 import (
+	"context"
 	"log"
+	"net"
 	"os"
 	"time"
 
 	gocql "github.com/apache/cassandra-gocql-driver/v2"
-	dockertest "github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
+	testcontainers "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 type TestContainer struct {
-	resource *dockertest.Resource
-	pool     *dockertest.Pool
-	address  string
-	keyspace string
+	container testcontainers.Container
+	address   string
+	keyspace  string
 }
 
 func NewTestContainer() *TestContainer {
-	// Create a new dockertest pool
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to Docker: %s", err)
-	}
-	pool.MaxWait = 300 * time.Second
-
-	// Run a Cassandra container
-	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "cassandra",
-		Tag:        "5.0.6",
-		Env: []string{
-			"MAX_HEAP_SIZE=1G",  // Set the maximum heap size to 1GB
-			"HEAP_NEWSIZE=256M", // Set the new heap size to 256MB
-			"CASSANDRA_CLUSTER_NAME=test",
-			"CASSANDRA_DC=dc1",
-			"CASSANDRA_RACK=rack1",
+	ctx := context.Background()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "cassandra:5.0.6",
+			ExposedPorts: []string{"9042/tcp"},
+			Env: map[string]string{
+				"MAX_HEAP_SIZE":         "1G",
+				"HEAP_NEWSIZE":          "256M",
+				"CASSANDRA_CLUSTER_NAME": "test",
+				"CASSANDRA_DC":          "dc1",
+				"CASSANDRA_RACK":        "rack1",
+			},
+			WaitingFor: wait.ForListeningPort("9042/tcp").WithStartupTimeout(300 * time.Second),
 		},
-	}, func(config *docker.HostConfig) {
-		// set AutoRemove to true so that stopped container goes away by itself
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
+		Started: true,
 	})
 	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
+		log.Fatalf("Could not start container: %s", err)
 	}
 
-	hostAndPort := resource.GetHostPort("9042/tcp")
+	host, err := container.Host(ctx)
+	if err != nil {
+		log.Fatalf("Could not get container host: %s", err)
+	}
+	mappedPort, err := container.MappedPort(ctx, "9042/tcp")
+	if err != nil {
+		log.Fatalf("Could not get container port: %s", err)
+	}
+	hostAndPort := net.JoinHostPort(host, mappedPort.Port())
 
-	if err = pool.Retry(func() error {
-		// Try to connect to the Cassandra container
-		// to make sure the server is ready
-		_, err := getCassandraClient(hostAndPort, "")
-		return err
-	}); err != nil {
+	if err := waitForCassandra(hostAndPort, 300*time.Second); err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 
-	// Tell docker to hard kill the container in 300 seconds
-	_ = resource.Expire(300)
+	containerInstance := new(TestContainer)
+	containerInstance.container = container
+	containerInstance.address = hostAndPort
+	containerInstance.keyspace = "test_keyspace"
 
-	container := new(TestContainer)
-	container.resource = resource
-	container.pool = pool
-	container.address = hostAndPort
-	container.keyspace = "test_keyspace"
-
-	err = container.CreateKeyspaceAndTable()
+	err = containerInstance.CreateKeyspaceAndTable()
 	if err != nil {
 		log.Fatalf("Could not create keyspace and table: %s", err)
 	}
 
-	return container
+	return containerInstance
 }
 
 func (c TestContainer) Cleanup() {
-	if err := c.pool.Purge(c.resource); err != nil {
-		log.Fatalf("Could not purge resource: %s", err)
+	ctx := context.Background()
+	if err := c.container.Terminate(ctx); err != nil {
+		log.Fatalf("Could not terminate container: %s", err)
 	}
 }
 
@@ -115,6 +109,21 @@ func getCassandraClient(address string, keyspace string) (*gocql.Session, error)
 		return nil, err
 	}
 	return session, nil
+}
+
+func waitForCassandra(address string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		session, err := getCassandraClient(address, "")
+		if err == nil {
+			session.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func (c TestContainer) GetDurableStore() *DurableStore {

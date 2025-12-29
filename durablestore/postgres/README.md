@@ -8,7 +8,6 @@ It uses `github.com/jackc/pgx/v5` with a small connection pool and persists snap
 - Implements `github.com/tochemey/ego/v3/persistence.StateStore`
 - Connection pooling via `pgxpool` with sensible defaults (4 max connections)
 - Idempotent `INSERT ... ON CONFLICT` upsert for each `PersistenceID`
-- Helper utilities (`testkit.go`, `schema_utils.go`) for integration testing
 - SQL builder based on `github.com/Masterminds/squirrel`
 
 ## Schema
@@ -114,7 +113,7 @@ func main() {
 
 ## Testing
 - Unit and integration suites: `go test ./...`
-- Docker-based harness: `durablestore/postgres/testkit.go` spins up PostgreSQL 11 through Dockertest and exposes helpers such as `SchemaUtils`
+- Docker-based harness: `durablestore/postgres/helper_test.go` spins up PostgreSQL 11 through Testcontainers-Go and exposes helpers such as `SchemaUtils`
 - CI-friendly recipe: run `earthly +test` from the repository root if you already use Earthly locally
 
 ## Operational Notes

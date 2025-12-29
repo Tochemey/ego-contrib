@@ -35,8 +35,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq" //nolint
-	dockertest "github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
+	testcontainers "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // TestContainer helps creates a database docker container to
@@ -46,8 +46,7 @@ type TestContainer struct {
 	port   int
 	schema string
 
-	resource *dockertest.Resource
-	pool     *dockertest.Pool
+	container testcontainers.Container
 
 	// connection credentials
 	dbUser string
@@ -58,55 +57,45 @@ type TestContainer struct {
 // NewTestContainer create a database test container useful for unit and integration tests
 // This function will exit when there is an error.Call this function inside your SetupTest to create the container before each test.
 func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
-	// create the docker pool
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
-	}
-	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "postgres",
-		Tag:        "11",
-		Env: []string{
-			fmt.Sprintf("POSTGRES_PASSWORD=%s", dbPassword),
-			fmt.Sprintf("POSTGRES_USER=%s", dbUser),
-			fmt.Sprintf("POSTGRES_DB=%s", dbName),
-			"listen_addresses = '*'",
+	ctx := context.Background()
+	tcContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "postgres:11",
+			ExposedPorts: []string{"5432/tcp"},
+			Env: map[string]string{
+				"POSTGRES_PASSWORD": dbPassword,
+				"POSTGRES_USER":     dbUser,
+				"POSTGRES_DB":       dbName,
+			},
+			Cmd: []string{
+				"postgres", "-c", "log_statement=all", "-c", "log_connections=on", "-c", "log_disconnections=on",
+			},
+			WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(120 * time.Second),
 		},
-		Cmd: []string{
-			"postgres", "-c", "log_statement=all", "-c", "log_connections=on", "-c", "log_disconnections=on",
-		},
-	}, func(config *docker.HostConfig) {
-		// set AutoRemove to true so that stopped container goes away by itself
-		config.AutoRemove = true
-		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
+		Started: true,
 	})
-	// handle the error
 	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
+		log.Fatalf("Could not start container: %s", err)
 	}
-	// get the host and port of the database connection
-	hostAndPort := resource.GetHostPort("5432/tcp")
-	databaseURL := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", dbUser, dbPassword, hostAndPort, dbName)
-	// Tell docker to hard kill the container in 120 seconds
-	_ = resource.Expire(120)
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	pool.MaxWait = 120 * time.Second
 
-	if err = pool.Retry(func() error {
-		db, err := sql.Open("postgres", databaseURL)
-		if err != nil {
-			return err
-		}
-		return db.Ping()
-	}); err != nil {
+	host, err := tcContainer.Host(ctx)
+	if err != nil {
+		log.Fatalf("Could not get container host: %s", err)
+	}
+	mappedPort, err := tcContainer.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		log.Fatalf("Could not get container port: %s", err)
+	}
+	hostAndPort := net.JoinHostPort(host, mappedPort.Port())
+	databaseURL := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", dbUser, dbPassword, hostAndPort, dbName)
+
+	if err := waitForPostgres(databaseURL, 120*time.Second); err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 
 	// create an instance of TestContainer
 	container := new(TestContainer)
-	container.pool = pool
-	container.resource = resource
+	container.container = tcContainer
 	host, port, err := splitHostAndPort(hostAndPort)
 	if err != nil {
 		log.Fatalf("Unable to get database host and port: %s", err)
@@ -159,8 +148,9 @@ func (c TestContainer) Schema() string {
 // Cleanup frees the resource by removing a container and linked volumes from docker.
 // Call this function inside your TearDownSuite to clean-up resources after each test
 func (c TestContainer) Cleanup() {
-	if err := c.pool.Purge(c.resource); err != nil {
-		log.Fatalf("Could not purge resource: %s", err)
+	ctx := context.Background()
+	if err := c.container.Terminate(ctx); err != nil {
+		log.Fatalf("Could not terminate container: %s", err)
 	}
 }
 
@@ -226,6 +216,26 @@ func (c TestDB) SchemaExists(ctx context.Context, schemaName string) (bool, erro
 	}
 
 	return false, nil
+}
+
+func waitForPostgres(databaseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		db, err := sql.Open("postgres", databaseURL)
+		if err == nil {
+			pingErr := db.Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return nil
+			}
+			err = pingErr
+		}
+
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // DropSchema utility function to drop a database schema
