@@ -249,3 +249,37 @@ func splitHostAndPort(hostAndPort string) (string, int, error) {
 
 	return host, portValue, nil
 }
+
+// SchemaUtils help create the various test tables in unit/integration tests
+type SchemaUtils struct {
+	db *TestDB
+}
+
+// NewSchemaUtils creates an instance of SchemaUtils
+func NewSchemaUtils(db *TestDB) *SchemaUtils {
+	return &SchemaUtils{db: db}
+}
+
+// CreateTable creates the event store table used for unit tests
+func (d SchemaUtils) CreateTable(ctx context.Context) error {
+	schemaDDL := `
+	DROP TABLE IF EXISTS states_store;
+	CREATE TABLE IF NOT EXISTS states_store
+	(
+	    persistence_id  VARCHAR(255)          PRIMARY KEY,
+	    version_number BIGINT                 NOT NULL,
+	    state_payload   BYTEA                 NOT NULL,
+	    state_manifest  VARCHAR(255)          NOT NULL,
+	    timestamp       BIGINT                NOT NULL,
+	    shard_number BIGINT NOT NULL
+	);
+	`
+	_, err := d.db.Exec(ctx, schemaDDL)
+	return err
+}
+
+// DropTable drop the table used in unit test
+// This is useful for resource cleanup after a unit test
+func (d SchemaUtils) DropTable(ctx context.Context) error {
+	return d.db.DropTable(ctx, tableName)
+}

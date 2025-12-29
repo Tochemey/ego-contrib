@@ -31,14 +31,13 @@ import (
 	"net/http"
 	"time"
 
-	dockertest "github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	dockertest "github.com/ory/dockertest/v3"
+	"github.com/ory/dockertest/v3/docker"
 )
 
 type TestContainer struct {
