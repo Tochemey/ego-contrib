@@ -30,7 +30,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v4/egopb"
 )
 
 type item struct {

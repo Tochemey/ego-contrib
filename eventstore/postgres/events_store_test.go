@@ -29,9 +29,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
-	"github.com/tochemey/ego/v3/test/data/testpb"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/persistence"
+	"github.com/tochemey/ego/v4/test/data/testpb"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -113,8 +113,6 @@ func TestPostgresEventsStore(t *testing.T) {
 		err = schemaUtil.CreateTable(ctx)
 		require.NoError(t, err)
 
-		state, err := anypb.New(&testpb.Account{})
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCreated{})
 		assert.NoError(t, err)
 
@@ -128,7 +126,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 1,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts1.AsTime().Unix(),
 			Shard:          shard1,
 		}
@@ -141,7 +138,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 2,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts2.AsTime().Unix(),
 			Shard:          shard2,
 		}
@@ -201,8 +197,6 @@ func TestPostgresEventsStore(t *testing.T) {
 		err = schemaUtil.CreateTable(ctx)
 		require.NoError(t, err)
 
-		state, err := anypb.New(&testpb.Account{})
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCreated{})
 		assert.NoError(t, err)
 
@@ -216,7 +210,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 1,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts1.AsTime().Unix(),
 			Shard:          shard1,
 		}
@@ -229,7 +222,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 2,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts2.AsTime().Unix(),
 			Shard:          shard2,
 		}
@@ -276,8 +268,6 @@ func TestPostgresEventsStore(t *testing.T) {
 		err = schemaUtil.CreateTable(ctx)
 		require.NoError(t, err)
 
-		state, err := anypb.New(&testpb.Account{})
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCreated{})
 		assert.NoError(t, err)
 
@@ -291,7 +281,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 1,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts1.AsTime().Unix(),
 			Shard:          shard1,
 		}
@@ -304,7 +293,6 @@ func TestPostgresEventsStore(t *testing.T) {
 			SequenceNumber: 2,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      ts2.AsTime().Unix(),
 			Shard:          shard2,
 		}

@@ -3,36 +3,36 @@
 [![build](https://img.shields.io/github/actions/workflow/status/Tochemey/ego-contrib/build.yml?branch=main)](https://github.com/Tochemey/ego-contrib/actions/workflows/build.yml)
 [![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/tochemey/ego-contrib)](https://go.dev/doc/install)
 
-Community-maintained storage backends and tooling for [eGo](https://github.com/Tochemey/ego).  
-Plug any module into eGo’s persistence APIs and mix durable state, event journals, and projection offsets—no infrastructure rewrites. 💡
+Community-maintained storage backends and tooling for [eGo](https://github.com/Tochemey/ego).
+Plug any module into eGo's persistence APIs and mix durable state, event journals, and projection offsets without infrastructure rewrites.
 
-## 📦 Available Modules
+## Available Modules
 
-| Category | Backend | Highlights | Documentation |
-|----------|---------|------------|---------------|
-| Durable State | Memory | Zero-dependency snapshots for tests and prototypes | [README](./durablestore/memory/README.md) |
-| Durable State | PostgreSQL | `pgx` snapshots with `INSERT … ON CONFLICT` upserts | [README](./durablestore/postgres/README.md) · [Schema](./durablestore/postgres/resources/durablestore_postgres.sql) |
-| Durable State | Amazon DynamoDB | Serverless persistence via AWS SDK v2 | [README](./durablestore/dynamodb/README.md) |
-| Durable State | Apache Cassandra | Highly available state store using `gocql` | [README](./durablestore/cassandra/README.md) | · [Schema](./durablestore/cassandra/resources/durablestore_cassandra.cql) |
-| Event Store | Memory | HashiCorp `memdb` journal for event-sourced tests | [README](./eventstore/memory/README.md) |
-| Event Store | PostgreSQL | Batched inserts and fast replay queries (`pgx`) | [README](./eventstore/postgres/README.md) · [Schema](./eventstore/postgres/resources/eventstore_postgres.sql) |
-| Offset Store | Memory | In-memory projection offsets with `memdb` | [README](./offsetstore/memory/README.md) |
-| Offset Store | PostgreSQL | Transactional offset management on RDBMS | [README](./offsetstore/postgres/README.md) · [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql) |
+| Category      | Backend          | Highlights                                            | Documentation                                                                                                          |
+|---------------|------------------|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| Durable State | Memory           | Zero-dependency snapshots for tests and prototypes    | [README](./durablestore/memory/README.md)                                                                              |
+| Durable State | PostgreSQL       | `pgx` snapshots with `INSERT ... ON CONFLICT` upserts | [README](./durablestore/postgres/README.md) / [Schema](./durablestore/postgres/resources/durablestore_postgres.sql)    |
+| Durable State | Amazon DynamoDB  | Serverless persistence via AWS SDK v2                 | [README](./durablestore/dynamodb/README.md)                                                                            |
+| Durable State | Apache Cassandra | Highly available state store using `gocql`            | [README](./durablestore/cassandra/README.md) / [Schema](./durablestore/cassandra/resources/durablestore_cassandra.cql) |
+| Event Store   | Memory           | HashiCorp `memdb` journal for event-sourced tests     | [README](./eventstore/memory/README.md)                                                                                |
+| Event Store   | PostgreSQL       | Batched inserts and fast replay queries (`pgx`)       | [README](./eventstore/postgres/README.md) / [Schema](./eventstore/postgres/resources/eventstore_postgres.sql)          |
+| Offset Store  | Memory           | In-memory projection offsets with `memdb`             | [README](./offsetstore/memory/README.md)                                                                               |
+| Offset Store  | PostgreSQL       | Transactional offset management on RDBMS              | [README](./offsetstore/postgres/README.md) / [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql)       |
 
-> 🤗 Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-contrib/issues/new) or propose one—contributions welcome!
+Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-contrib/issues/new) or propose one -- contributions welcome!
 
-## 🧭 Getting Started
+## Getting Started
 
-1. 📥 Install the module you need
+1. Install the module you need:
    ```bash
    go get github.com/tochemey/ego-contrib/eventstore/postgres
    ```
    Replace the path with any package from the table above.
 
-2. 🧱 Prepare the backing service  
-   Apply the SQL schema (PostgreSQL) or provision the DynamoDB table. Schemas live in each module’s `resources/` folder.
+2. Prepare the backing service.
+   Apply the SQL schema (PostgreSQL) or provision the DynamoDB table. Schemas live in each module's `resources/` folder.
 
-3. 🔌 Wire the store into your eGo system
+3. Wire the store into your eGo system:
    ```go
    package main
 
@@ -42,7 +42,7 @@ Plug any module into eGo’s persistence APIs and mix durable state, event journ
 
        eventpg "github.com/tochemey/ego-contrib/eventstore/postgres"
        durablemem "github.com/tochemey/ego-contrib/durablestore/memory"
-       "github.com/tochemey/ego/v3/persistence"
+       "github.com/tochemey/ego/v4/persistence"
    )
 
    func main() {
@@ -60,23 +60,23 @@ Plug any module into eGo’s persistence APIs and mix durable state, event journ
            log.Fatalf("connect durable store: %v", err)
        }
 
-       // supply to your eGo framework…
+       // supply to your eGo framework...
        var _ persistence.EventsStore = events
        var _ persistence.StateStore = durable
    }
    ```
 
-4. 📚 Explore module guides: Each README covers backend-specific setup, examples, and testing tips.
+4. Explore module guides: each README covers backend-specific setup, examples, and testing tips.
 
-## 🗂️ Repository Structure
+## Repository Structure
 
-- `durablestore/` – durable state stores (memory, PostgreSQL, DynamoDB)
-- `eventstore/` – event journals for event-sourced behaviors
-- `offsetstore/` – projection offset stores for eGo projections
-- `Earthfile` – builds via [Earthly](https://earthly.dev)
-- `contributing.md`, `code_of_conduct.md` – community guidelines
+- `durablestore/` -- durable state stores (memory, PostgreSQL, DynamoDB, Cassandra)
+- `eventstore/` -- event journals for event-sourced behaviors
+- `offsetstore/` -- projection offset stores for eGo projections
+- `Earthfile` -- builds via [Earthly](https://earthly.dev)
+- `contributing.md`, `code_of_conduct.md` -- community guidelines
 
-## 🛠️ Development Workflow
+## Development Workflow
 
 - Uses [Semantic Versioning](https://semver.org) and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 - Primary CI/local workflows in the `Earthfile`. Run:
@@ -84,15 +84,15 @@ Plug any module into eGo’s persistence APIs and mix durable state, event journ
   earthly +test
   ```
   to lint and test all modules.
-- External-service modules ship Testcontainers-Go helpers for integration tests—see each backend’s `testkit.go`.
+- External-service modules ship Testcontainers-Go helpers for integration tests -- see each backend's `testkit.go`.
 
-## 🤝 Contributing
+## Contributing
 
-We welcome everything from typo fixes to brand‑new backends.
+We welcome everything from typo fixes to brand-new backends.
 
 1. Read [code_of_conduct.md](./code_of_conduct.md) and [contributing.md](./contributing.md).
 2. For larger changes, open an issue or draft PR to align early.
 3. Follow existing package layout and naming.
 4. Open a PR. If you run Earthly builds from a fork, export `DOCKER_USER` and `DOCKER_PASS`.
 
-Prefer not to fork? Ask for collaborator access and we’ll streamline your flow. ✨
+Prefer not to fork? Ask for collaborator access and we'll streamline your flow.

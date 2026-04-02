@@ -29,8 +29,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/persistence"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,8 +42,6 @@ var (
 		"is_deleted",
 		"event_payload",
 		"event_manifest",
-		"state_payload",
-		"state_manifest",
 		"timestamp",
 		"shard_number",
 	}
@@ -201,20 +199,11 @@ func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) er
 	// start creating the sql statement for insertion
 	statement := s.sb.Insert(tableName).Columns(columns...)
 	for index, event := range events {
-		var (
-			eventManifest string
-			eventBytes    []byte
-			stateManifest string
-			stateBytes    []byte
-		)
-
-		// serialize the event and resulting state
-		eventBytes, _ = proto.Marshal(event.GetEvent())
-		stateBytes, _ = proto.Marshal(event.GetResultingState())
+		// serialize the event
+		eventBytes, _ := proto.Marshal(event.GetEvent())
 
 		// grab the manifest
-		eventManifest = string(event.GetEvent().ProtoReflect().Descriptor().FullName())
-		stateManifest = string(event.GetResultingState().ProtoReflect().Descriptor().FullName())
+		eventManifest := string(event.GetEvent().ProtoReflect().Descriptor().FullName())
 
 		// build the insertion values
 		statement = statement.Values(
@@ -223,8 +212,6 @@ func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) er
 			event.GetIsDeleted(),
 			eventBytes,
 			eventManifest,
-			stateBytes,
-			stateManifest,
 			event.GetTimestamp(),
 			event.GetShard(),
 		)

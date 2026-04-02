@@ -30,7 +30,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v4/egopb"
 )
 
 // row represents the events store row
@@ -40,22 +40,16 @@ type row struct {
 	IsDeleted      bool
 	EventPayload   []byte
 	EventManifest  string
-	StatePayload   []byte
-	StateManifest  string
 	Timestamp      int64
 	ShardNumber    uint64
 }
 
 // ToEvent convert row to event
 func (x row) ToEvent() (*egopb.Event, error) {
-	// unmarshal the event and the state
+	// unmarshal the event
 	evt, err := toProto(x.EventManifest, x.EventPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-	}
-	state, err := toProto(x.StateManifest, x.StatePayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 	}
 
 	return &egopb.Event{
@@ -63,7 +57,6 @@ func (x row) ToEvent() (*egopb.Event, error) {
 		SequenceNumber: x.SequenceNumber,
 		IsDeleted:      x.IsDeleted,
 		Event:          evt,
-		ResultingState: state,
 		Timestamp:      x.Timestamp,
 		Shard:          x.ShardNumber,
 	}, nil
@@ -78,14 +71,10 @@ func (x rows) ToEvents() ([]*egopb.Event, error) {
 	events := make([]*egopb.Event, 0, len(x))
 	// iterate the rows
 	for _, row := range x {
-		// unmarshal the event and the state
+		// unmarshal the event
 		evt, err := toProto(row.EventManifest, row.EventPayload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-		}
-		state, err := toProto(row.StateManifest, row.StatePayload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 		}
 		// create the event and add it to the list of events
 		events = append(events, &egopb.Event{
@@ -93,7 +82,6 @@ func (x rows) ToEvents() ([]*egopb.Event, error) {
 			SequenceNumber: row.SequenceNumber,
 			IsDeleted:      row.IsDeleted,
 			Event:          evt,
-			ResultingState: state,
 			Timestamp:      row.Timestamp,
 			Shard:          row.ShardNumber,
 		})

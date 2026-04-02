@@ -31,8 +31,8 @@ import (
 	goset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-memdb"
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/persistence"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -204,13 +204,11 @@ func (s *EventsStore) WriteEvents(_ context.Context, events []*egopb.Event) erro
 	txn := s.db.Txn(true)
 	// iterate the event and persist the record
 	for _, event := range events {
-		// serialize the event and resulting state
+		// serialize the event
 		eventBytes, _ := proto.Marshal(event.GetEvent())
-		stateBytes, _ := proto.Marshal(event.GetResultingState())
 
 		// grab the manifest
 		eventManifest := string(event.GetEvent().ProtoReflect().Descriptor().FullName())
-		stateManifest := string(event.GetResultingState().ProtoReflect().Descriptor().FullName())
 
 		// create an instance of Journal
 		journal := &journal{
@@ -220,8 +218,6 @@ func (s *EventsStore) WriteEvents(_ context.Context, events []*egopb.Event) erro
 			IsDeleted:      event.GetIsDeleted(),
 			EventPayload:   eventBytes,
 			EventManifest:  eventManifest,
-			StatePayload:   stateBytes,
-			StateManifest:  stateManifest,
 			Timestamp:      event.GetTimestamp(),
 			ShardNumber:    event.GetShard(),
 		}
@@ -326,14 +322,10 @@ func (s *EventsStore) ReplayEvents(_ context.Context, persistenceID string, from
 	var events []*egopb.Event
 	for _, journal := range journals {
 		if journal.SequenceNumber >= fromSequenceNumber && journal.SequenceNumber <= toSequenceNumber {
-			// unmarshal the event and the state
+			// unmarshal the event
 			evt, err := toProto(journal.EventManifest, journal.EventPayload)
 			if err != nil {
 				return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-			}
-			state, err := toProto(journal.StateManifest, journal.StatePayload)
-			if err != nil {
-				return nil, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 			}
 
 			if uint64(len(events)) <= limit {
@@ -343,7 +335,6 @@ func (s *EventsStore) ReplayEvents(_ context.Context, persistenceID string, from
 					SequenceNumber: journal.SequenceNumber,
 					IsDeleted:      journal.IsDeleted,
 					Event:          evt,
-					ResultingState: state,
 					Timestamp:      journal.Timestamp,
 					Shard:          journal.ShardNumber,
 				})
@@ -386,14 +377,10 @@ func (s *EventsStore) GetLatestEvent(_ context.Context, persistenceID string) (*
 
 	// let us cast the raw data
 	if journal, ok := raw.(*journal); ok {
-		// unmarshal the event and the state
+		// unmarshal the event
 		evt, err := toProto(journal.EventManifest, journal.EventPayload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-		}
-		state, err := toProto(journal.StateManifest, journal.StatePayload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 		}
 
 		return &egopb.Event{
@@ -401,7 +388,6 @@ func (s *EventsStore) GetLatestEvent(_ context.Context, persistenceID string) (*
 			SequenceNumber: journal.SequenceNumber,
 			IsDeleted:      journal.IsDeleted,
 			Event:          evt,
-			ResultingState: state,
 			Timestamp:      journal.Timestamp,
 			Shard:          journal.ShardNumber,
 		}, nil
@@ -451,14 +437,10 @@ func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offs
 	for _, journal := range journals {
 		// only fetch record which timestamp is greater than the offset
 		if journal.Timestamp > offset {
-			// unmarshal the event and the state
+			// unmarshal the event
 			evt, err := toProto(journal.EventManifest, journal.EventPayload)
 			if err != nil {
 				return nil, 0, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-			}
-			state, err := toProto(journal.StateManifest, journal.StatePayload)
-			if err != nil {
-				return nil, 0, fmt.Errorf("failed to unmarshal the journal state: %w", err)
 			}
 
 			if uint64(len(events)) <= limit {
@@ -468,7 +450,6 @@ func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offs
 					SequenceNumber: journal.SequenceNumber,
 					IsDeleted:      journal.IsDeleted,
 					Event:          evt,
-					ResultingState: state,
 					Timestamp:      journal.Timestamp,
 					Shard:          journal.ShardNumber,
 				})

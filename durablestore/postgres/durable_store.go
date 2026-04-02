@@ -32,8 +32,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/persistence"
 )
 
 var (

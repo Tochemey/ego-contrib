@@ -33,8 +33,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/offsetstore"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/offsetstore"
 
 	postgres "github.com/tochemey/ego-contrib/offsetstore/postgres/internal"
 )

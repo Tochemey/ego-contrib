@@ -41,10 +41,6 @@ type journal struct {
 	EventPayload []byte
 	// Specifies the event manifest
 	EventManifest string
-	// Specifies the state payload
-	StatePayload []byte
-	// Specifies the state manifest
-	StateManifest string
 	// Specifies time the record has been persisted
 	Timestamp int64
 	// Specifies the shard number

@@ -29,9 +29,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/tochemey/ego/v3/persistence"
-	"github.com/tochemey/ego/v3/test/data/testpb"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/persistence"
+	"github.com/tochemey/ego/v4/test/data/testpb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -55,8 +55,6 @@ func TestEventsStore(t *testing.T) {
 	})
 	t.Run("testWriteEvents", func(t *testing.T) {
 		ctx := context.TODO()
-		state, err := anypb.New(new(testpb.Account))
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
 
@@ -68,7 +66,6 @@ func TestEventsStore(t *testing.T) {
 			SequenceNumber: 1,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      timestamp.AsTime().Unix(),
 			Shard:          shardNumber,
 		}
@@ -96,8 +93,6 @@ func TestEventsStore(t *testing.T) {
 	})
 	t.Run("testDeleteEvents", func(t *testing.T) {
 		ctx := context.TODO()
-		state, err := anypb.New(new(testpb.Account))
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
 
@@ -108,7 +103,6 @@ func TestEventsStore(t *testing.T) {
 			SequenceNumber: 1,
 			IsDeleted:      false,
 			Event:          event,
-			ResultingState: state,
 			Timestamp:      timestamp.AsTime().Unix(),
 		}
 
@@ -138,8 +132,6 @@ func TestEventsStore(t *testing.T) {
 	})
 	t.Run("testReplayEvents", func(t *testing.T) {
 		ctx := context.TODO()
-		state, err := anypb.New(new(testpb.Account))
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
 
@@ -154,7 +146,6 @@ func TestEventsStore(t *testing.T) {
 				SequenceNumber: uint64(seqNr),
 				IsDeleted:      false,
 				Event:          event,
-				ResultingState: state,
 				Timestamp:      timestamp.AsTime().Unix(),
 			}
 		}
@@ -179,8 +170,6 @@ func TestEventsStore(t *testing.T) {
 	})
 	t.Run("testPersistenceIDs", func(t *testing.T) {
 		ctx := context.TODO()
-		state, err := anypb.New(new(testpb.Account))
-		assert.NoError(t, err)
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
 
@@ -195,7 +184,6 @@ func TestEventsStore(t *testing.T) {
 				SequenceNumber: uint64(seqNr),
 				IsDeleted:      false,
 				Event:          event,
-				ResultingState: state,
 				Timestamp:      timestamp.AsTime().Unix(),
 			}
 		}
