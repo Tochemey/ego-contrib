@@ -34,9 +34,18 @@ import (
 	"testing"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq" //nolint
+	pgxmock "github.com/pashagolub/pgxmock/v4"
+	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/tochemey/ego/v4/egopb"
+	"github.com/tochemey/ego/v4/test/data/testpb"
+	"go.uber.org/atomic"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 var testContainer *TestContainer
@@ -306,19 +315,20 @@ func (d SchemaUtils) CreateTable(ctx context.Context) error {
 	DROP TABLE IF EXISTS events_store;
 	CREATE TABLE IF NOT EXISTS events_store
 	(
-	    persistence_id  VARCHAR(255)          NOT NULL,
-	    sequence_number BIGINT                NOT NULL,
-	    is_deleted      BOOLEAN DEFAULT FALSE NOT NULL,
-	    event_payload   BYTEA                 NOT NULL,
-	    event_manifest  VARCHAR(255)          NOT NULL,
-	    timestamp       BIGINT                NOT NULL,
-	    shard_number BIGINT NOT NULL ,
-	
+	    persistence_id    VARCHAR(255)          NOT NULL,
+	    sequence_number   BIGINT                NOT NULL,
+	    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
+	    event_payload     BYTEA                 NOT NULL,
+	    event_manifest    VARCHAR(255)          NOT NULL,
+	    timestamp         BIGINT                NOT NULL,
+	    shard_number      BIGINT                NOT NULL,
+	    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
+	    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
+
 	    PRIMARY KEY (persistence_id, sequence_number)
 	);
-	
-	--- create an index on the is_deleted column
-	CREATE INDEX IF NOT EXISTS idx_event_journal_deleted ON events_store (is_deleted);
+
+	--- create indexes
 	CREATE INDEX IF NOT EXISTS idx_event_journal_shard ON events_store (shard_number);
 	`
 	_, err := d.db.Exec(ctx, schemaDDL)
@@ -329,4 +339,74 @@ func (d SchemaUtils) CreateTable(ctx context.Context) error {
 // This is useful for resource cleanup after a unit test
 func (d SchemaUtils) DropTable(ctx context.Context) error {
 	return d.db.DropTable(ctx, tableName)
+}
+
+// MockDB implements the database interface for unit testing.
+// It delegates BeginTx to pgxmock for transaction mocking.
+type MockDB struct {
+	connectErr    error
+	disconnectErr error
+	pingErr       error
+	selectErr     error
+	selectAllErr  error
+	execErr       error
+	beginTxErr    error
+	mockPool      pgxmock.PgxPoolIface
+}
+
+var _ database = (*MockDB)(nil)
+
+func (m *MockDB) Connect(ctx context.Context) error    { return m.connectErr }
+func (m *MockDB) Disconnect(ctx context.Context) error { return m.disconnectErr }
+func (m *MockDB) Ping(ctx context.Context) error       { return m.pingErr }
+
+func (m *MockDB) Select(ctx context.Context, dst any, query string, args ...any) error {
+	return m.selectErr
+}
+
+func (m *MockDB) SelectAll(ctx context.Context, dst any, query string, args ...any) error {
+	return m.selectAllErr
+}
+
+func (m *MockDB) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	if m.execErr != nil {
+		return pgconn.CommandTag{}, m.execErr
+	}
+	return pgconn.NewCommandTag("OK"), nil
+}
+
+func (m *MockDB) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+	if m.beginTxErr != nil {
+		return nil, m.beginTxErr
+	}
+	return m.mockPool.BeginTx(ctx, txOptions)
+}
+
+func NewMockDB(t *testing.T) (*MockDB, pgxmock.PgxPoolIface) {
+	t.Helper()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	t.Cleanup(func() { mock.Close() })
+	return &MockDB{mockPool: mock}, mock
+}
+
+func NewTestEventsStore(db database, connected bool) *EventsStore {
+	return &EventsStore{
+		db:              db,
+		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		insertBatchSize: 500,
+		connected:       atomic.NewBool(connected),
+	}
+}
+
+func NewTestEvent(persistenceID string, seqNum uint64, shard uint64) *egopb.Event {
+	event, _ := anypb.New(&testpb.AccountCreated{})
+	return &egopb.Event{
+		PersistenceId:  persistenceID,
+		SequenceNumber: seqNum,
+		IsDeleted:      false,
+		Event:          event,
+		Timestamp:      1000,
+		Shard:          shard,
+	}
 }

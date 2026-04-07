@@ -192,31 +192,6 @@ func (c TestDB) Count(ctx context.Context, tableName string) (int, error) {
 	return count, nil
 }
 
-// CreateSchema helps create a test schema in a database database
-func (c TestDB) CreateSchema(ctx context.Context, schemaName string) error {
-	stmt := fmt.Sprintf("CREATE SCHEMA %s", schemaName)
-	if _, err := c.Exec(ctx, stmt); err != nil {
-		return err
-	}
-	return nil
-}
-
-// SchemaExists helps check the existence of a database schema. Very useful when implementing tests
-func (c TestDB) SchemaExists(ctx context.Context, schemaName string) (bool, error) {
-	stmt := fmt.Sprintf("SELECT schema_name FROM information_schema.schemata WHERE schema_name = '%s';", schemaName)
-	var check string
-	if err := c.Select(ctx, &check, stmt); err != nil {
-		return false, err
-	}
-
-	// this redundant check is necessary
-	if check == schemaName {
-		return true, nil
-	}
-
-	return false, nil
-}
-
 func waitForPostgres(databaseURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -235,13 +210,6 @@ func waitForPostgres(databaseURL string, timeout time.Duration) error {
 		}
 		time.Sleep(2 * time.Second)
 	}
-}
-
-// DropSchema utility function to drop a database schema
-func (c TestDB) DropSchema(ctx context.Context, schemaName string) error {
-	var dropSQL = fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE;", schemaName)
-	_, err := c.Exec(ctx, dropSQL)
-	return err
 }
 
 // splitHostAndPort helps get the host address and port of and address
@@ -269,18 +237,20 @@ func NewSchemaUtils(db *TestDB) *SchemaUtils {
 	return &SchemaUtils{db: db}
 }
 
-// CreateTable creates the event store table used for unit tests
+// CreateTable creates the snapshot store table used for unit tests
 func (d SchemaUtils) CreateTable(ctx context.Context) error {
 	schemaDDL := `
-	DROP TABLE IF EXISTS states_store;
-	CREATE TABLE IF NOT EXISTS states_store
+	DROP TABLE IF EXISTS snapshots_store;
+	CREATE TABLE IF NOT EXISTS snapshots_store
 	(
-	    persistence_id  VARCHAR(255)          PRIMARY KEY,
-	    version_number BIGINT                 NOT NULL,
-	    state_payload   BYTEA                 NOT NULL,
-	    state_manifest  VARCHAR(255)          NOT NULL,
-	    timestamp       BIGINT                NOT NULL,
-	    shard_number BIGINT NOT NULL
+	    persistence_id    VARCHAR(255) NOT NULL,
+	    sequence_number   BIGINT       NOT NULL,
+	    state_payload     BYTEA        NOT NULL,
+	    state_manifest    VARCHAR(255) NOT NULL,
+	    timestamp         BIGINT       NOT NULL,
+	    encryption_key_id VARCHAR(255) NOT NULL DEFAULT '',
+	    is_encrypted      BOOLEAN      NOT NULL DEFAULT FALSE,
+	    PRIMARY KEY (persistence_id, sequence_number)
 	);
 	`
 	_, err := d.db.Exec(ctx, schemaDDL)

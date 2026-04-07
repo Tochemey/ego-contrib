@@ -1,4 +1,4 @@
-# eGo Contrib
+# eGo contrib
 
 [![build](https://img.shields.io/github/actions/workflow/status/Tochemey/ego-contrib/build.yml?branch=main)](https://github.com/Tochemey/ego-contrib/actions/workflows/build.yml)
 [![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/tochemey/ego-contrib)](https://go.dev/doc/install)
@@ -8,16 +8,35 @@ Plug any module into eGo's persistence APIs and mix durable state, event journal
 
 ## Available Modules
 
-| Category      | Backend          | Documentation                                                                                                          |
-|---------------|------------------|------------------------------------------------------------------------------------------------------------------------|
-| Durable State | Memory           | [README](./durablestore/memory/README.md)                                                                              |
-| Durable State | PostgreSQL       | [README](./durablestore/postgres/README.md) / [Schema](./durablestore/postgres/resources/durablestore_postgres.sql)    |
-| Durable State | Amazon DynamoDB  | [README](./durablestore/dynamodb/README.md)                                                                            |
-| Durable State | Apache Cassandra | [README](./durablestore/cassandra/README.md) / [Schema](./durablestore/cassandra/resources/durablestore_cassandra.cql) |
-| Event Store   | Memory           | [README](./eventstore/memory/README.md)                                                                                |
-| Event Store   | PostgreSQL       | [README](./eventstore/postgres/README.md) / [Schema](./eventstore/postgres/resources/eventstore_postgres.sql)          |
-| Offset Store  | Memory           | [README](./offsetstore/memory/README.md)                                                                               |
-| Offset Store  | PostgreSQL       | [README](./offsetstore/postgres/README.md) / [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql)       |
+### Durable State Stores
+
+- **Memory** - `go get github.com/tochemey/ego-contrib/durablestore/memory`
+  [README](./durablestore/memory/README.md)
+- **PostgreSQL** - `go get github.com/tochemey/ego-contrib/durablestore/postgres`
+  [README](./durablestore/postgres/README.md) | [Schema](./durablestore/postgres/resources/durablestore_postgres.sql)
+- **Amazon DynamoDB** - `go get github.com/tochemey/ego-contrib/durablestore/dynamodb`
+  [README](./durablestore/dynamodb/README.md)
+- **Apache Cassandra** - `go get github.com/tochemey/ego-contrib/durablestore/cassandra`
+  [README](./durablestore/cassandra/README.md) | [Schema](./durablestore/cassandra/resources/states_store.sql)
+
+### Event Stores
+
+- **Memory** - `go get github.com/tochemey/ego-contrib/eventstore/memory`
+  [README](./eventstore/memory/README.md)
+- **PostgreSQL** - `go get github.com/tochemey/ego-contrib/eventstore/postgres`
+  [README](./eventstore/postgres/README.md) | [Schema](./eventstore/postgres/resources/eventstore_postgres.sql)
+
+### Offset Stores
+
+- **Memory** - `go get github.com/tochemey/ego-contrib/offsetstore/memory`
+  [README](./offsetstore/memory/README.md)
+- **PostgreSQL** - `go get github.com/tochemey/ego-contrib/offsetstore/postgres`
+  [README](./offsetstore/postgres/README.md) | [Schema](./offsetstore/postgres/resources/offsetstore_postgres.sql)
+
+### Snapshot Stores
+
+- **PostgreSQL** - `go get github.com/tochemey/ego-contrib/snapshotstore/postgres`
+  [Schema](./snapshotstore/postgres/resources/snapshotstore_postgres.sql)
 
 Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-contrib/issues/new) or propose one -- contributions welcome!
 
@@ -73,6 +92,7 @@ Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-cont
 - `durablestore/` -- durable state stores (memory, PostgreSQL, DynamoDB, Cassandra)
 - `eventstore/` -- event journals for event-sourced behaviors
 - `offsetstore/` -- projection offset stores for eGo projections
+- `snapshotstore/` -- snapshot stores for eGo snapshot-based persistence
 - `Earthfile` -- builds via [Earthly](https://earthly.dev)
 - `contributing.md`, `code_of_conduct.md` -- community guidelines
 

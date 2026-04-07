@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  tag-submodules:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module:
+          - eventstore/memory
+          - eventstore/postgres
+          - durablestore/dynamodb
+          - durablestore/cassandra
+          - durablestore/postgres
+          - durablestore/memory
+          - offsetstore/memory
+          - offsetstore/postgres
+          - snapshotstore/postgres
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create submodule tag
+        env:
+          TAG: ${{ github.ref_name }}
+          MODULE: ${{ matrix.module }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${MODULE}/${TAG}"
+          git push origin "${MODULE}/${TAG}"

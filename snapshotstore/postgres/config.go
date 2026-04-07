@@ -24,7 +24,7 @@ package postgres
 
 import "time"
 
-// Config defines the postgres events store configuration
+// Config defines the postgres snapshot store configuration
 type Config struct {
 	DBHost     string // DBHost represents the database host
 	DBPort     int    // DBPort is the database port

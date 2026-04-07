@@ -38,6 +38,8 @@ type Postgres interface {
 	Connect(ctx context.Context) error
 	// Disconnect closes the underlying opened underlying connection database
 	Disconnect(ctx context.Context) error
+	// Ping verifies the database connection is still alive
+	Ping(ctx context.Context) error
 	// Select fetches a single row from the database and automatically scanned it into the dst.
 	// It returns an error in case of failure. When there is no record no errors is return.
 	Select(ctx context.Context, dst any, query string, args ...any) error
@@ -115,6 +117,11 @@ func createConnectionString(host string, port int, name, user string, password s
 	}
 
 	return info
+}
+
+// Ping verifies the database connection is still alive
+func (pg *postgres) Ping(ctx context.Context) error {
+	return pg.pool.Ping(ctx)
 }
 
 // Exec executes a sql query without returning rows against the database

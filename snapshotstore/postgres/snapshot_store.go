@@ -29,28 +29,28 @@ import (
 	"sync"
 
 	sq "github.com/Masterminds/squirrel"
-	"google.golang.org/protobuf/proto"
-
 	"github.com/tochemey/ego/v4/egopb"
 	"github.com/tochemey/ego/v4/persistence"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
 	columns = []string{
 		"persistence_id",
-		"version_number",
+		"sequence_number",
 		"state_payload",
 		"state_manifest",
 		"timestamp",
-		"shard_number",
+		"encryption_key_id",
+		"is_encrypted",
 	}
 
-	tableName = "states_store"
+	tableName = "snapshots_store"
 )
 
-// DurableStore implements the DurableStore interface
-// and helps persist events in a database database
-type DurableStore struct {
+// SnapshotStore implements the persistence.SnapshotStore interface
+// and helps persist entity snapshots in a postgres database
+type SnapshotStore struct {
 	db database
 	sb sq.StatementBuilderType
 	// guards connection state transitions
@@ -59,20 +59,20 @@ type DurableStore struct {
 }
 
 // enforce interface implementation
-var _ persistence.StateStore = (*DurableStore)(nil)
+var _ persistence.SnapshotStore = (*SnapshotStore)(nil)
 
-// NewDurableStore creates a new instance of StateStore
-func NewDurableStore(config *Config) *DurableStore {
+// NewSnapshotStore creates a new instance of SnapshotStore
+func NewSnapshotStore(config *Config) *SnapshotStore {
 	// create the underlying db connection
 	db := newDatabase(newConfig(config))
-	return &DurableStore{
+	return &SnapshotStore{
 		db: db,
 		sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
 	}
 }
 
 // Connect connects to the underlying postgres database
-func (s *DurableStore) Connect(ctx context.Context) error {
+func (s *SnapshotStore) Connect(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -89,7 +89,7 @@ func (s *DurableStore) Connect(ctx context.Context) error {
 }
 
 // Disconnect disconnects from the underlying postgres database
-func (s *DurableStore) Disconnect(ctx context.Context) error {
+func (s *SnapshotStore) Disconnect(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -106,7 +106,7 @@ func (s *DurableStore) Disconnect(ctx context.Context) error {
 }
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
-func (s *DurableStore) Ping(ctx context.Context) error {
+func (s *SnapshotStore) Ping(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.connected {
 		s.mu.Unlock()
@@ -117,81 +117,109 @@ func (s *DurableStore) Ping(ctx context.Context) error {
 	return s.db.Ping(ctx)
 }
 
-// WriteState writes a durable state into the underlying postgres database
-func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
+// WriteSnapshot persists a snapshot for a given persistenceID.
+func (s *SnapshotStore) WriteSnapshot(ctx context.Context, snapshot *egopb.Snapshot) error {
 	if !s.isConnected() {
-		return errors.New("durable store is not connected")
+		return errors.New("snapshot store is not connected")
 	}
 
-	if state == nil || proto.Equal(state, &egopb.DurableState{}) {
+	if snapshot == nil || proto.Equal(snapshot, &egopb.Snapshot{}) {
 		return nil
 	}
 
-	bytea, _ := proto.Marshal(state.GetResultingState())
-	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
+	bytea, _ := proto.Marshal(snapshot.GetState())
+	manifest := string(snapshot.GetState().ProtoReflect().Descriptor().FullName())
 
 	statement := s.sb.
 		Insert(tableName).
 		Columns(columns...).
 		Values(
-			state.GetPersistenceId(),
-			state.GetVersionNumber(),
+			snapshot.GetPersistenceId(),
+			snapshot.GetSequenceNumber(),
 			bytea,
 			manifest,
-			state.GetTimestamp(),
-			state.GetShard(),
-		).Suffix("ON CONFLICT (persistence_id) " +
+			snapshot.GetTimestamp(),
+			snapshot.GetEncryptionKeyId(),
+			snapshot.GetIsEncrypted(),
+		).Suffix("ON CONFLICT (persistence_id, sequence_number) " +
 		"DO UPDATE SET " +
-		"version_number = excluded.version_number," +
-		"state_payload = excluded.state_payload, " +
-		"state_manifest = excluded.state_manifest," +
-		"timestamp = excluded.timestamp," +
-		"shard_number = excluded.shard_number",
+		"state_payload = EXCLUDED.state_payload, " +
+		"state_manifest = EXCLUDED.state_manifest, " +
+		"timestamp = EXCLUDED.timestamp, " +
+		"encryption_key_id = EXCLUDED.encryption_key_id, " +
+		"is_encrypted = EXCLUDED.is_encrypted",
 	)
 
 	query, args, err := statement.ToSql()
 	if err != nil {
-		return fmt.Errorf("unable to build sql insert statement: %w", err)
+		return fmt.Errorf("unable to build sql upsert statement: %w", err)
 	}
 
 	if _, err = s.db.Exec(ctx, query, args...); err != nil {
-		return fmt.Errorf("failed to record durable state: %w", err)
+		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
 	return nil
 }
 
-// GetLatestState fetches the latest durable state of a persistenceID
-func (s *DurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
+// GetLatestSnapshot fetches the latest snapshot for a given persistenceID.
+// Returns nil when no snapshot is found.
+func (s *SnapshotStore) GetLatestSnapshot(ctx context.Context, persistenceID string) (*egopb.Snapshot, error) {
 	if !s.isConnected() {
-		return nil, errors.New("durable store is not connected")
+		return nil, errors.New("snapshot store is not connected")
 	}
 
 	statement := s.sb.
 		Select(columns...).
 		From(tableName).
-		Where(sq.Eq{"persistence_id": persistenceID})
+		Where(sq.Eq{"persistence_id": persistenceID}).
+		OrderBy("sequence_number DESC").
+		Limit(1)
 
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
-	row := new(row)
+	row := new(snapshotRow)
 	err = s.db.Select(ctx, row, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the latest event from the database: %w", err)
+		return nil, fmt.Errorf("failed to fetch the latest snapshot from the database: %w", err)
 	}
 
+	// no record found
 	if row.PersistenceID == "" {
 		return nil, nil
 	}
 
-	return row.ToDurableState()
+	return row.ToSnapshot()
+}
+
+// DeleteSnapshots deletes all snapshots for a given persistenceID up to a given sequence number (inclusive).
+func (s *SnapshotStore) DeleteSnapshots(ctx context.Context, persistenceID string, toSequenceNumber uint64) error {
+	if !s.isConnected() {
+		return errors.New("snapshot store is not connected")
+	}
+
+	statement := s.sb.
+		Delete(tableName).
+		Where(sq.Eq{"persistence_id": persistenceID}).
+		Where(sq.LtOrEq{"sequence_number": toSequenceNumber})
+
+	query, args, err := statement.ToSql()
+	if err != nil {
+		return fmt.Errorf("unable to build sql delete statement: %w", err)
+	}
+
+	if _, err = s.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to delete snapshots: %w", err)
+	}
+
+	return nil
 }
 
 // isConnected returns whether the store is currently connected
-func (s *DurableStore) isConnected() bool {
+func (s *SnapshotStore) isConnected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.connected

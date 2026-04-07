@@ -24,9 +24,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	pgxmock "github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tochemey/ego/v4/egopb"
@@ -355,5 +358,352 @@ func TestPostgresEventsStore(t *testing.T) {
 
 		err = store.Disconnect(ctx)
 		assert.NoError(t, err)
+	})
+}
+
+func TestEventsStoreNotConnected(t *testing.T) {
+	ctx := context.Background()
+	db, _ := NewMockDB(t)
+	store := NewTestEventsStore(db, false)
+
+	t.Run("WriteEvents", func(t *testing.T) {
+		err := store.WriteEvents(ctx, []*egopb.Event{NewTestEvent("p1", 1, 1)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("DeleteEvents", func(t *testing.T) {
+		err := store.DeleteEvents(ctx, "p1", 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("ReplayEvents", func(t *testing.T) {
+		_, err := store.ReplayEvents(ctx, "p1", 1, 10, 100)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("GetLatestEvent", func(t *testing.T) {
+		_, err := store.GetLatestEvent(ctx, "p1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("GetShardEvents", func(t *testing.T) {
+		_, _, err := store.GetShardEvents(ctx, 1, 0, 100)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("ShardNumbers", func(t *testing.T) {
+		_, err := store.ShardNumbers(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("PersistenceIDs", func(t *testing.T) {
+		_, _, err := store.PersistenceIDs(ctx, 10, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+}
+
+func TestEventsStoreConnectionLifecycle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Connect already connected is no-op", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+		err := store.Connect(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Connect propagates db error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.connectErr = errors.New("connection refused")
+		store := NewTestEventsStore(db, false)
+		err := store.Connect(ctx)
+		require.Error(t, err)
+		assert.False(t, store.connected.Load())
+	})
+
+	t.Run("Disconnect when not connected is no-op", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, false)
+		err := store.Disconnect(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Disconnect propagates db error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.disconnectErr = errors.New("disconnect failed")
+		store := NewTestEventsStore(db, true)
+		err := store.Disconnect(ctx)
+		require.Error(t, err)
+		assert.True(t, store.connected.Load())
+	})
+
+	t.Run("Ping when connected delegates to db", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+		err := store.Ping(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Ping when connected propagates db error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.pingErr = errors.New("ping failed")
+		store := NewTestEventsStore(db, true)
+		err := store.Ping(ctx)
+		require.Error(t, err)
+		assert.EqualError(t, err, "ping failed")
+	})
+
+	t.Run("Ping when not connected calls Connect", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, false)
+		err := store.Ping(ctx)
+		assert.NoError(t, err)
+		assert.True(t, store.connected.Load())
+	})
+
+	t.Run("Ping when not connected propagates Connect error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.connectErr = errors.New("connect failed")
+		store := NewTestEventsStore(db, false)
+		err := store.Ping(ctx)
+		require.Error(t, err)
+		assert.False(t, store.connected.Load())
+	})
+}
+
+func TestWriteEventsUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty events is no-op", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+		err := store.WriteEvents(ctx, []*egopb.Event{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("BeginTx error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.beginTxErr = errors.New("begin tx failed")
+		store := NewTestEventsStore(db, true)
+
+		err := store.WriteEvents(ctx, []*egopb.Event{NewTestEvent("p1", 1, 1)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to obtain a database transaction")
+	})
+
+	t.Run("tx Exec error with successful rollback", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("INSERT INTO events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnError(errors.New("exec failed"))
+		mock.ExpectRollback()
+
+		err := store.WriteEvents(ctx, []*egopb.Event{NewTestEvent("p1", 1, 1)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to record events")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tx Exec error with rollback failure", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("INSERT INTO events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnError(errors.New("exec failed"))
+		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+
+		err := store.WriteEvents(ctx, []*egopb.Event{NewTestEvent("p1", 1, 1)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unable to rollback db transaction")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tx Commit error", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("INSERT INTO events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+		err := store.WriteEvents(ctx, []*egopb.Event{NewTestEvent("p1", 1, 1)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to record events")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestDeleteEventsUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("BeginTx error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.beginTxErr = errors.New("begin tx failed")
+		store := NewTestEventsStore(db, true)
+
+		err := store.DeleteEvents(ctx, "p1", 5)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to obtain a database transaction")
+	})
+
+	t.Run("tx Exec error with successful rollback", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("DELETE FROM events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnError(errors.New("exec failed"))
+		mock.ExpectRollback()
+
+		err := store.DeleteEvents(ctx, "p1", 5)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to delete events from the database")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tx Exec error with rollback failure", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("DELETE FROM events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnError(errors.New("exec failed"))
+		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+
+		err := store.DeleteEvents(ctx, "p1", 5)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unable to rollback db transaction")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tx Commit error", func(t *testing.T) {
+		db, mock := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		mock.ExpectBeginTx(pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+		mock.ExpectExec("DELETE FROM events_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("DELETE", 2))
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+		err := store.DeleteEvents(ctx, "p1", 5)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to commit delete events")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestReplayEventsUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SelectAll error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.selectAllErr = errors.New("select failed")
+		store := NewTestEventsStore(db, true)
+
+		_, err := store.ReplayEvents(ctx, "p1", 1, 10, 100)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to fetch the events from the database")
+	})
+}
+
+func TestGetLatestEventUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Select error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.selectErr = errors.New("select failed")
+		store := NewTestEventsStore(db, true)
+
+		_, err := store.GetLatestEvent(ctx, "p1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to fetch the latest event from the database")
+	})
+
+	t.Run("empty result returns nil", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		event, err := store.GetLatestEvent(ctx, "p1")
+		assert.NoError(t, err)
+		assert.Nil(t, event)
+	})
+}
+
+func TestGetShardEventsUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SelectAll error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.selectAllErr = errors.New("select failed")
+		store := NewTestEventsStore(db, true)
+
+		_, _, err := store.GetShardEvents(ctx, 1, 0, 100)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to fetch the events from the database")
+	})
+
+	t.Run("empty result returns nil", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		events, offset, err := store.GetShardEvents(ctx, 1, 0, 100)
+		assert.NoError(t, err)
+		assert.Nil(t, events)
+		assert.EqualValues(t, 0, offset)
+	})
+}
+
+func TestShardNumbersUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SelectAll error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.selectAllErr = errors.New("select failed")
+		store := NewTestEventsStore(db, true)
+
+		_, err := store.ShardNumbers(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to fetch the events from the database")
+	})
+}
+
+func TestPersistenceIDsUnit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SelectAll error", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		db.selectAllErr = errors.New("select failed")
+		store := NewTestEventsStore(db, true)
+
+		_, _, err := store.PersistenceIDs(ctx, 10, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to fetch the events from the database")
+	})
+
+	t.Run("empty result returns nil", func(t *testing.T) {
+		db, _ := NewMockDB(t)
+		store := NewTestEventsStore(db, true)
+
+		ids, token, err := store.PersistenceIDs(ctx, 10, "")
+		assert.NoError(t, err)
+		assert.Nil(t, ids)
+		assert.Empty(t, token)
 	})
 }

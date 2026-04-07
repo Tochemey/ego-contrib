@@ -43,7 +43,7 @@ type PostgresTestSuite struct {
 	container *TestContainer
 }
 
-// SetupSuite starts the database database engine and set the container
+// SetupSuite starts the database engine and set the container
 // host and port to use in the tests
 func (s *PostgresTestSuite) SetupSuite() {
 	s.container = NewTestContainer("testdb", "test", "test")
@@ -314,7 +314,7 @@ func createTable(ctx context.Context, db database) error {
 		    account_id		UUID,
 			account_name 	VARCHAR(255)  NOT NULL,
 		    PRIMARY KEY (account_id)
-		);	
+		);
 	`
 	_, err := db.Exec(ctx, schemaDDL)
 	return err

@@ -44,6 +44,8 @@ var (
 		"event_manifest",
 		"timestamp",
 		"shard_number",
+		"encryption_key_id",
+		"is_encrypted",
 	}
 
 	tableName = "events_store"
@@ -71,7 +73,7 @@ var _ persistence.EventsStore = (*EventsStore)(nil)
 // NewEventsStore creates a new instance of PostgresEventStore
 func NewEventsStore(config *Config) *EventsStore {
 	// create the underlying db connection
-	db := newDatabase(newConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
+	db := newDatabase(newConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName, config.DBSchema))
 	return &EventsStore{
 		db:              db,
 		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
@@ -122,7 +124,7 @@ func (s *EventsStore) Ping(ctx context.Context) error {
 		return s.Connect(ctx)
 	}
 
-	return nil
+	return s.db.Ping(ctx)
 }
 
 // PersistenceIDs returns the distinct list of all the persistence ids in the journal store
@@ -164,6 +166,11 @@ func (s *EventsStore) PersistenceIDs(ctx context.Context, pageSize uint64, pageT
 		return nil, "", fmt.Errorf("failed to fetch the events from the database: %w", err)
 	}
 
+	// handle empty result set
+	if len(rows) == 0 {
+		return nil, "", nil
+	}
+
 	// grab the fetched records
 	persistenceIDs = make([]string, len(rows))
 	for index, row := range rows {
@@ -200,7 +207,10 @@ func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) er
 	statement := s.sb.Insert(tableName).Columns(columns...)
 	for index, event := range events {
 		// serialize the event
-		eventBytes, _ := proto.Marshal(event.GetEvent())
+		eventBytes, err := proto.Marshal(event.GetEvent())
+		if err != nil {
+			return fmt.Errorf("failed to marshal event at index %d: %w", index, err)
+		}
 
 		// grab the manifest
 		eventManifest := string(event.GetEvent().ProtoReflect().Descriptor().FullName())
@@ -214,6 +224,8 @@ func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) er
 			eventManifest,
 			event.GetTimestamp(),
 			event.GetShard(),
+			event.GetEncryptionKeyId(),
+			event.GetIsEncrypted(),
 		)
 
 		if (index+1)%s.insertBatchSize == 0 || index == len(events)-1 {
@@ -267,9 +279,23 @@ func (s *EventsStore) DeleteEvents(ctx context.Context, persistenceID string, to
 		return fmt.Errorf("failed to build the delete events sql statement: %w", err)
 	}
 
-	// execute the sql statement
-	if _, err := s.db.Exec(ctx, query, args...); err != nil {
-		return fmt.Errorf("failed to delete events from the database: %w", err)
+	// begin a transaction for the delete operation
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("failed to obtain a database transaction: %w", err)
+	}
+
+	// execute the sql statement within the transaction
+	if _, execErr := tx.Exec(ctx, query, args...); execErr != nil {
+		if err = tx.Rollback(ctx); err != nil {
+			return fmt.Errorf("unable to rollback db transaction: %w", err)
+		}
+		return fmt.Errorf("failed to delete events from the database: %w", execErr)
+	}
+
+	// commit the transaction
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit delete events: %w", err)
 	}
 
 	return nil

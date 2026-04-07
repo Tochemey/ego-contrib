@@ -19,22 +19,21 @@
 --  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 --  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 --  SOFTWARE.
-
-CREATE TABLE IF NOT EXISTS events_store
-(
-    persistence_id  VARCHAR(255)          NOT NULL,
-    sequence_number BIGINT                NOT NULL,
-    is_deleted      BOOLEAN DEFAULT FALSE NOT NULL,
-    event_payload   BYTEA                 NOT NULL,
-    event_manifest  VARCHAR(255)          NOT NULL,
-    timestamp       BIGINT                NOT NULL,
-    shard_number    BIGINT                NOT NULL,
-
+CREATE TABLE IF NOT EXISTS events_store(
+    persistence_id varchar(255) NOT NULL,
+    sequence_number bigint NOT NULL,
+    is_deleted boolean DEFAULT FALSE NOT NULL,
+    event_payload bytea NOT NULL,
+    event_manifest varchar(255) NOT NULL,
+    timestamp bigint NOT NULL,
+    shard_number bigint NOT NULL,
+    encryption_key_id varchar(255) DEFAULT '' NOT NULL,
+    is_encrypted boolean DEFAULT FALSE NOT NULL,
     PRIMARY KEY (persistence_id, sequence_number)
 );
 
---- create an indexes
-CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(persistence_id);
-CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
-CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store (timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store (shard_number);
+--- create indexes
+CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
+

@@ -27,5 +27,5 @@ CREATE TABLE IF NOT EXISTS states_store (
     state_manifest  text,
     timestamp       bigint,
     shard_number    bigint,
-    PRIMARY KEY (shard_number, persistence_id)
+    PRIMARY KEY (persistence_id)
 );

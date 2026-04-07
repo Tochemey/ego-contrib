@@ -29,7 +29,6 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
@@ -63,17 +62,10 @@ type offsetRow struct {
 }
 
 // OffsetStore implements the OffsetStore interface
-// and helps persist events in a ipostgres database
+// and helps persist offsets in a postgres database
 type OffsetStore struct {
 	db postgres.Postgres
 	sb sq.StatementBuilderType
-	// insertBatchSize represents the chunk of data to bulk insert.
-	// This helps avoid the postgres 65535 parameter limit.
-	// This is necessary because ipostgres uses a 32-bit int for binding input parameters and
-	// is not able to track anything larger.
-	// Note: Change this value when you know the size of data to bulk insert at once. Otherwise, you
-	// might encounter the postgres 65535 parameter limit error.
-	insertBatchSize int
 	// hold the connection state to avoid multiple connection of the same instance
 	connected *atomic.Bool
 }
@@ -84,12 +76,13 @@ var _ offsetstore.OffsetStore = (*OffsetStore)(nil)
 // NewOffsetStore creates an instance of OffsetStore
 func NewOffsetStore(config *Config) *OffsetStore {
 	// create the underlying db connection
-	db := postgres.New(postgres.NewConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName))
+	dbConfig := postgres.NewConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName)
+	dbConfig.DBSchema = config.DBSchema
+	db := postgres.New(dbConfig)
 	return &OffsetStore{
-		db:              db,
-		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
-		insertBatchSize: 500,
-		connected:       atomic.NewBool(false),
+		db:        db,
+		sb:        sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		connected: atomic.NewBool(false),
 	}
 }
 
@@ -140,76 +133,30 @@ func (x *OffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) err
 		return errors.New("offset record is not defined")
 	}
 
-	// let us begin a database transaction to make sure we atomically write those events into the database
-	tx, err := x.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	// return the error in case we are unable to get a database transaction
-	if err != nil {
-		return fmt.Errorf("failed to obtain a database transaction: %w", err)
-	}
-
-	var (
-		query string
-		args  []any
-	)
-
-	// remove existing offset
-	deleteBuilder := x.sb.
-		Delete(tableName).
-		Where(sq.Eq{"projection_name": offset.GetProjectionName()}).
-		Where(sq.Eq{"shard_number": offset.GetShardNumber()})
-
-	// get the SQL statement to run
-	query, args, err = deleteBuilder.ToSql()
-	// handle the error while generating the SQL
-	if err != nil {
-		return fmt.Errorf("unable to build sql delete statement: %w", err)
-	}
-
-	// execute the query
-	_, execErr := tx.Exec(ctx, query, args...)
-	if execErr != nil {
-		// attempt to roll back the transaction and log the error in case there is an error
-		if err = tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("unable to rollback db transaction: %w", err)
-		}
-		// return the main error
-		return fmt.Errorf("failed to record events: %w", execErr)
-	}
-
-	// create the insert statement
-	insertBuilder := x.sb.
+	// create the upsert statement
+	upsertBuilder := x.sb.
 		Insert(tableName).
 		Columns(columns...).
 		Values(
 			offset.GetProjectionName(),
 			offset.GetShardNumber(),
 			offset.GetValue(),
-			offset.GetTimestamp())
+			offset.GetTimestamp()).
+		Suffix("ON CONFLICT (projection_name, shard_number) " +
+			"DO UPDATE SET current_offset = EXCLUDED.current_offset, timestamp = EXCLUDED.timestamp")
 
 	// get the SQL statement to run
-	query, args, err = insertBuilder.ToSql()
-	// handle the error while generating the SQL
+	query, args, err := upsertBuilder.ToSql()
 	if err != nil {
-		return fmt.Errorf("unable to build sql insert statement: %w", err)
+		return fmt.Errorf("unable to build sql upsert statement: %w", err)
 	}
 
-	// insert into the table
-	_, execErr = tx.Exec(ctx, query, args...)
-	if execErr != nil {
-		// attempt to roll back the transaction and log the error in case there is an error
-		if err = tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("unable to rollback db transaction: %w", err)
-		}
-		// return the main error
-		return fmt.Errorf("failed to record events: %w", execErr)
+	// execute the upsert
+	_, err = x.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to write offset: %w", err)
 	}
 
-	// commit the transaction
-	if commitErr := tx.Commit(ctx); commitErr != nil {
-		// return the commit error in case there is one
-		return fmt.Errorf("failed to record events: %w", commitErr)
-	}
-	// every looks good
 	return nil
 }
 
@@ -239,6 +186,11 @@ func (x *OffsetStore) GetCurrentOffset(ctx context.Context, projectionID *egopb.
 		return nil, fmt.Errorf("failed to fetch the current offset from the database: %w", err)
 	}
 
+	// no record found
+	if row.ProjectionName == "" {
+		return nil, nil
+	}
+
 	return &egopb.Offset{
 		ShardNumber:    row.ShardNumber,
 		ProjectionName: row.ProjectionName,
@@ -254,13 +206,6 @@ func (x *OffsetStore) ResetOffset(ctx context.Context, projectionName string, va
 		return errors.New("offset store is not connected")
 	}
 
-	// let us begin a database transaction to make sure we atomically write those events into the database
-	tx, err := x.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	// return the error in case we are unable to get a database transaction
-	if err != nil {
-		return fmt.Errorf("failed to obtain a database transaction: %w", err)
-	}
-
 	// define the current timestamp
 	timestamp := time.Now().UnixMilli()
 
@@ -273,28 +218,16 @@ func (x *OffsetStore) ResetOffset(ctx context.Context, projectionName string, va
 
 	// get the SQL statement to run
 	query, args, err := statement.ToSql()
-	// handle the error while generating the SQL
 	if err != nil {
-		return fmt.Errorf("unable to build sql insert statement: %w", err)
+		return fmt.Errorf("unable to build sql update statement: %w", err)
 	}
 
-	// insert into the table
-	_, execErr := tx.Exec(ctx, query, args...)
-	if execErr != nil {
-		// attempt to roll back the transaction and log the error in case there is an error
-		if err = tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("unable to rollback db transaction: %w", err)
-		}
-		// return the main error
-		return fmt.Errorf("failed to record events: %w", execErr)
+	// execute the update
+	_, err = x.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to reset offset: %w", err)
 	}
 
-	// commit the transaction
-	if commitErr := tx.Commit(ctx); commitErr != nil {
-		// return the commit error in case there is one
-		return fmt.Errorf("failed to record events: %w", commitErr)
-	}
-	// every looks good
 	return nil
 }
 
@@ -305,5 +238,5 @@ func (x *OffsetStore) Ping(ctx context.Context) error {
 		return x.Connect(ctx)
 	}
 
-	return nil
+	return x.db.Ping(ctx)
 }

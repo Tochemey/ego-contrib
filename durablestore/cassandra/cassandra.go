@@ -23,6 +23,7 @@
 package cassandra
 
 import (
+	"errors"
 	"fmt"
 
 	gocql "github.com/apache/cassandra-gocql-driver/v2"
@@ -71,7 +72,6 @@ func (c *cassandra) WriteState(persistenceID string, versionNumber uint64, bytea
 }
 
 func (c *cassandra) GetLatestState(persistenceID string) (*row, error) {
-	// var state *row
 	state := row{}
 	if err := c.session.Query(
 		`SELECT persistence_id, version_number, state_payload, state_manifest, timestamp, shard_number FROM states_store WHERE persistence_id = ?`,
@@ -86,6 +86,9 @@ func (c *cassandra) GetLatestState(persistenceID string) (*row, error) {
 			&state.Timestamp,
 			&state.ShardNumber,
 		); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to read latest state from cassandra: %w", err)
 	}
 	return &state, nil

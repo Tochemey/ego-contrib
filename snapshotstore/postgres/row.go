@@ -25,75 +25,40 @@ package postgres
 import (
 	"fmt"
 
+	"github.com/tochemey/ego/v4/egopb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
-
-	"github.com/tochemey/ego/v4/egopb"
 )
 
-// row represents the events store row
-type row struct {
+// snapshotRow represents the snapshot store row
+type snapshotRow struct {
 	PersistenceID   string
 	SequenceNumber  uint64
-	IsDeleted       bool
-	EventPayload    []byte
-	EventManifest   string
+	StatePayload    []byte
+	StateManifest   string
 	Timestamp       int64
-	ShardNumber     uint64
-	EncryptionKeyID string
-	IsEncrypted     bool
+	EncryptionKeyID string `db:"encryption_key_id"`
+	IsEncrypted     bool   `db:"is_encrypted"`
 }
 
-// ToEvent convert row to event
-func (x row) ToEvent() (*egopb.Event, error) {
-	// unmarshal the event
-	evt, err := toProto(x.EventManifest, x.EventPayload)
+// ToSnapshot converts row to snapshot
+func (x snapshotRow) ToSnapshot() (*egopb.Snapshot, error) {
+	// unmarshal the state
+	state, err := toProto(x.StateManifest, x.StatePayload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal the snapshot state: %w", err)
 	}
 
-	return &egopb.Event{
+	return &egopb.Snapshot{
 		PersistenceId:   x.PersistenceID,
 		SequenceNumber:  x.SequenceNumber,
-		IsDeleted:       x.IsDeleted,
-		Event:           evt,
+		State:           state,
 		Timestamp:       x.Timestamp,
-		Shard:           x.ShardNumber,
 		EncryptionKeyId: x.EncryptionKeyID,
 		IsEncrypted:     x.IsEncrypted,
 	}, nil
-}
-
-// rows defines the list of row
-type rows []*row
-
-// ToEvents converts rows to events
-func (x rows) ToEvents() ([]*egopb.Event, error) {
-	// create the list of events
-	events := make([]*egopb.Event, 0, len(x))
-	// iterate the rows
-	for _, row := range x {
-		// unmarshal the event
-		evt, err := toProto(row.EventManifest, row.EventPayload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal the journal event: %w", err)
-		}
-		// create the event and add it to the list of events
-		events = append(events, &egopb.Event{
-			PersistenceId:   row.PersistenceID,
-			SequenceNumber:  row.SequenceNumber,
-			IsDeleted:       row.IsDeleted,
-			Event:           evt,
-			Timestamp:       row.Timestamp,
-			Shard:           row.ShardNumber,
-			EncryptionKeyId: row.EncryptionKeyID,
-			IsEncrypted:     row.IsEncrypted,
-		})
-	}
-
-	return events, nil
 }
 
 // toProto converts a byte array given its manifest into a valid proto message

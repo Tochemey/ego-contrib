@@ -25,8 +25,6 @@ package postgres
 import "time"
 
 // dbConfig defines the postgres configuration
-// This configuration does not take into consideration the SSL mode
-// TODO: enhance with SSL mode
 type dbConfig struct {
 	DBHost                string        // DBHost represents the database host
 	DBPort                int           // DBPort is the database port
@@ -34,25 +32,58 @@ type dbConfig struct {
 	DBUser                string        // DBUser is the database user used to connect
 	DBPassword            string        // DBPassword is the database password
 	DBSchema              string        // DBSchema represents the database schema
+	DBSSLMode             string        // DBSSLMode represents the database SSL mode
 	MaxConnections        int           // MaxConnections represents the number of max connections in the pool
 	MinConnections        int           // MinConnections represents the number of minimum connections in the pool
 	MaxConnectionLifetime time.Duration // MaxConnectionLifetime represents the duration since creation after which a connection will be automatically closed.
 	MaxConnIdleTime       time.Duration // MaxConnIdleTime is the duration after which an idle connection will be automatically closed by the health check.
-	HealthCheckPeriod     time.Duration // HeathCheckPeriod is the duration between checks of the health of idle connections.
+	HealthCheckPeriod     time.Duration // HealthCheckPeriod is the duration between checks of the health of idle connections.
 }
 
-// newConfig creates an instance of dbConfig
-func newConfig(host string, port int, user, password, dbName string) *dbConfig {
-	return &dbConfig{
-		DBHost:                host,
-		DBPort:                port,
-		DBName:                dbName,
-		DBUser:                user,
-		DBPassword:            password,
-		MaxConnections:        4,
-		MinConnections:        0,
-		MaxConnectionLifetime: time.Hour,
-		MaxConnIdleTime:       30 * time.Minute,
-		HealthCheckPeriod:     time.Minute,
+// newConfig creates an instance of dbConfig from the public Config
+func newConfig(config *Config) *dbConfig {
+	cfg := &dbConfig{
+		DBHost:                config.DBHost,
+		DBPort:                config.DBPort,
+		DBName:                config.DBName,
+		DBUser:                config.DBUser,
+		DBPassword:            config.DBPassword,
+		DBSchema:              config.DBSchema,
+		DBSSLMode:             config.DBSSLMode,
+		MaxConnections:        config.MaxConnections,
+		MinConnections:        config.MinConnections,
+		MaxConnectionLifetime: config.MaxConnectionLifetime,
+		MaxConnIdleTime:       config.MaxConnIdleTime,
+		HealthCheckPeriod:     config.HealthCheckPeriod,
+	}
+
+	cfg.sanitize()
+	return cfg
+}
+
+func (c *dbConfig) sanitize() {
+	if c == nil {
+		return
+	}
+
+	// apply defaults
+	if c.DBSSLMode == "" {
+		c.DBSSLMode = "disable"
+	}
+
+	if c.MaxConnections == 0 {
+		c.MaxConnections = 4
+	}
+
+	if c.MaxConnectionLifetime == 0 {
+		c.MaxConnectionLifetime = time.Hour
+	}
+
+	if c.MaxConnIdleTime == 0 {
+		c.MaxConnIdleTime = 30 * time.Minute
+	}
+
+	if c.HealthCheckPeriod == 0 {
+		c.HealthCheckPeriod = time.Minute
 	}
 }

@@ -27,7 +27,6 @@ import (
 	"fmt"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,6 +36,8 @@ type database interface {
 	Connect(ctx context.Context) error
 	// Disconnect closes the underlying opened underlying connection database
 	Disconnect(ctx context.Context) error
+	// Ping verifies a connection to the database is still alive
+	Ping(ctx context.Context) error
 	// Select fetches a single row from the database and automatically scanned it into the dst.
 	// It returns an error in case of failure. When there is no record no errors is return.
 	Select(ctx context.Context, dst any, query string, args ...any) error
@@ -45,9 +46,6 @@ type database interface {
 	SelectAll(ctx context.Context, dst any, query string, args ...any) error
 	// Exec executes an SQL statement against the database and returns the appropriate result or an error.
 	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
-	// BeginTx helps start an SQL transaction. The return transaction object is expected to be used in
-	// the subsequent queries following the BeginTx.
-	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
 // database helps interact with the database database
@@ -63,7 +61,7 @@ var _ database = (*postgres)(nil)
 func newDatabase(config *dbConfig) database {
 	postgres := new(postgres)
 	postgres.config = config
-	postgres.connStr = createConnectionString(config.DBHost, config.DBPort, config.DBName, config.DBUser, config.DBPassword, config.DBSchema)
+	postgres.connStr = createConnectionString(config)
 	return postgres
 }
 
@@ -100,30 +98,30 @@ func (pg *postgres) Connect(ctx context.Context) error {
 
 // createConnectionString will create the database connection string from the
 // supplied connection details
-// TODO: enhance this with the SSL settings
-func createConnectionString(host string, port int, name, user string, password string, schema string) string {
-	info := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable", host, port, user, name)
+func createConnectionString(config *dbConfig) string {
+	info := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=%s",
+		config.DBHost, config.DBPort, config.DBUser, config.DBName, config.DBSSLMode)
 	// The database driver gets confused in cases where the user has no password
 	// set but a password is passed, so only set password if its non-empty
-	if password != "" {
-		info += fmt.Sprintf(" password=%s", password)
+	if config.DBPassword != "" {
+		info += fmt.Sprintf(" password=%s", config.DBPassword)
 	}
 
-	if schema != "" {
-		info += fmt.Sprintf(" search_path=%s", schema)
+	if config.DBSchema != "" {
+		info += fmt.Sprintf(" search_path=%s", config.DBSchema)
 	}
 
 	return info
 }
 
+// Ping verifies the database connection is still alive
+func (pg *postgres) Ping(ctx context.Context) error {
+	return pg.pool.Ping(ctx)
+}
+
 // Exec executes a sql query without returning rows against the database
 func (pg *postgres) Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
 	return pg.pool.Exec(ctx, query, args...)
-}
-
-// BeginTx starts a new database transaction
-func (pg *postgres) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
-	return pg.pool.BeginTx(ctx, txOptions)
 }
 
 // SelectAll fetches rows

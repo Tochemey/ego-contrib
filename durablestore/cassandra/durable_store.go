@@ -24,11 +24,10 @@ package cassandra
 
 import (
 	"context"
-	"fmt"
+	"sync"
 
 	"github.com/tochemey/ego/v4/egopb"
 	"github.com/tochemey/ego/v4/persistence"
-	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -36,7 +35,8 @@ import (
 // and helps persist durable states in a Cassandra database
 type DurableStore struct {
 	cluster   *cassandra
-	connected *atomic.Bool
+	connected bool
+	mu        sync.Mutex
 }
 
 // enforce interface implementation
@@ -45,32 +45,33 @@ var _ persistence.StateStore = (*DurableStore)(nil)
 func NewDurableStore(config *Config) *DurableStore {
 	cluster := newCassandra(config)
 	return &DurableStore{
-		cluster:   cluster,
-		connected: atomic.NewBool(false),
+		cluster: cluster,
 	}
 }
 
-// Connect connects to the journal store
-// No connection is needed because the client is stateless
+// Connect establishes a connection to the Cassandra cluster.
 func (s *DurableStore) Connect(_ context.Context) error {
-	if s.connected.Load() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.connected {
 		return nil
 	}
 
 	if err := s.cluster.Connect(); err != nil {
-		fmt.Printf("Failed to connect to Cassandra: %v", err)
 		return err
 	}
 
-	s.connected.Store(true)
-
+	s.connected = true
 	return nil
 }
 
-// Disconnect disconnect the journal store
-// There is no need to disconnect because the client is stateless
+// Disconnect closes the connection to the Cassandra cluster.
 func (s *DurableStore) Disconnect(_ context.Context) error {
-	if !s.connected.Load() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
 		return nil
 	}
 
@@ -78,15 +79,17 @@ func (s *DurableStore) Disconnect(_ context.Context) error {
 		return err
 	}
 
-	s.connected.Store(false)
-
+	s.connected = false
 	return nil
 }
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
-// There is no need to ping because the client is stateless
 func (s *DurableStore) Ping(ctx context.Context) error {
-	if !s.connected.Load() {
+	s.mu.Lock()
+	connected := s.connected
+	s.mu.Unlock()
+
+	if !connected {
 		return s.Connect(ctx)
 	}
 
@@ -114,17 +117,12 @@ func (s *DurableStore) WriteState(_ context.Context, state *egopb.DurableState) 
 // GetLatestState fetches the latest durable state
 func (s *DurableStore) GetLatestState(_ context.Context, persistenceID string) (*egopb.DurableState, error) {
 	result, err := s.cluster.GetLatestState(persistenceID)
+	if err != nil {
+		return nil, err
+	}
 	if result == nil {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
 
-	state, err := result.ToDurableState()
-	if err != nil {
-		return nil, err
-	}
-
-	return state, nil
+	return result.ToDurableState()
 }

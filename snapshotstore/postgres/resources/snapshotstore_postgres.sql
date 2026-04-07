@@ -19,14 +19,14 @@
 --  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 --  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 --  SOFTWARE.
-
-CREATE TABLE IF NOT EXISTS states_store
-(
-    persistence_id  VARCHAR(255)          PRIMARY KEY,
-    version_number BIGINT                 NOT NULL,
-    state_payload   BYTEA                 NOT NULL,
-    state_manifest  VARCHAR(255)          NOT NULL,
-    timestamp       BIGINT                NOT NULL,
-    shard_number    BIGINT                NOT NULL
+CREATE TABLE IF NOT EXISTS snapshots_store(
+    persistence_id varchar(255) NOT NULL,
+    sequence_number bigint NOT NULL,
+    state_payload bytea NOT NULL,
+    state_manifest varchar(255) NOT NULL,
+    timestamp bigint NOT NULL,
+    encryption_key_id varchar(255) NOT NULL DEFAULT '',
+    is_encrypted boolean NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (persistence_id, sequence_number)
 );
 
