@@ -35,56 +35,15 @@ Plug any module into eGo's persistence APIs and mix durable state, event journal
 
 | Backend    | README | Schema                                                                  | Install                                                         |
 |------------|--------|-------------------------------------------------------------------------|-----------------------------------------------------------------|
-| PostgreSQL | --     | [Schema](./snapshotstore/postgres/resources/snapshotstore_postgres.sql) | `go get github.com/tochemey/ego-contrib/snapshotstore/postgres` |
+| PostgreSQL | [README](./snapshotstore/postgres/README.md) | [Schema](./snapshotstore/postgres/resources/snapshotstore_postgres.sql) | `go get github.com/tochemey/ego-contrib/snapshotstore/postgres` |
 
 Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-contrib/issues/new) or propose one -- contributions welcome!
 
 ## Getting Started
 
-1. Install the module you need:
-   ```bash
-   go get github.com/tochemey/ego-contrib/eventstore/postgres
-   ```
-   Replace the path with any package from the tables above.
-
-2. Prepare the backing service.
-   Apply the SQL schema (PostgreSQL) or provision the DynamoDB table. Schemas live in each module's `resources/` folder.
-
-3. Wire the store into your eGo system:
-   ```go
-   package main
-
-   import (
-       "context"
-       "log"
-
-       eventpg "github.com/tochemey/ego-contrib/eventstore/postgres"
-       durablemem "github.com/tochemey/ego-contrib/durablestore/memory"
-       "github.com/tochemey/ego/v4/persistence"
-   )
-
-   func main() {
-       ctx := context.Background()
-
-       events := eventpg.NewEventsStore(&eventpg.Config{
-           DBHost: "127.0.0.1", DBPort: 5432, DBName: "ego", DBUser: "ego", DBPassword: "secret",
-       })
-       if err := events.Connect(ctx); err != nil {
-           log.Fatalf("connect event store: %v", err)
-       }
-
-       durable := durablemem.NewStateStore()
-       if err := durable.Connect(ctx); err != nil {
-           log.Fatalf("connect durable store: %v", err)
-       }
-
-       // supply to your eGo framework...
-       var _ persistence.EventsStore = events
-       var _ persistence.StateStore = durable
-   }
-   ```
-
-4. Explore module guides: each README covers backend-specific setup, examples, and testing tips.
+1. Pick a module from the tables above and `go get` it.
+2. Apply the SQL schema or provision the backing service. Schemas live in each module's `resources/` folder.
+3. Wire the store into your eGo system. See the [eGo documentation](https://github.com/Tochemey/ego) and each module's README for usage examples.
 
 ## Repository Structure
 
