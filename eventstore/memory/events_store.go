@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"sort"
 
-	goset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-memdb"
 	"github.com/tochemey/ego/v4/egopb"
@@ -473,8 +472,9 @@ func (s *EventsStore) GetShardEvents(_ context.Context, shardNumber uint64, offs
 	return events, nextOffset, nil
 }
 
-// ShardNumbers returns the distinct list of all the shards in the journal store
-func (s *EventsStore) ShardNumbers(context.Context) ([]uint64, error) {
+// ShardOffsets returns every distinct shard in the journal mapped to the
+// offset (timestamp) of its most recent event. An empty journal yields an empty map.
+func (s *EventsStore) ShardOffsets(context.Context) (map[uint64]int64, error) {
 	// check whether this instance of the journal is connected or not
 	if !s.connected.Load() {
 		return nil, errors.New("journal store is not connected")
@@ -482,39 +482,27 @@ func (s *EventsStore) ShardNumbers(context.Context) ([]uint64, error) {
 
 	// spawn a db transaction for read-only
 	txn := s.db.Txn(false)
+	defer txn.Abort()
+
 	// fetch all the records
 	it, err := txn.Get(journalTableName, persistenceIDIndex)
-	// handle the error
 	if err != nil {
-		// abort the transaction
-		txn.Abort()
-		return nil, fmt.Errorf("failed to fetch the list of shard number: %w", err)
+		return nil, fmt.Errorf("failed to fetch the shard offsets: %w", err)
 	}
 
-	// loop over the records
-	var journals []*journal
+	// keep the most recent timestamp seen per shard
+	offsets := make(map[uint64]int64)
 	for row := it.Next(); row != nil; row = it.Next() {
-		if journal, ok := row.(*journal); ok {
-			journals = append(journals, journal)
+		journal, ok := row.(*journal)
+		if !ok {
+			continue
+		}
+		if current, found := offsets[journal.ShardNumber]; !found || journal.Timestamp > current {
+			offsets[journal.ShardNumber] = journal.Timestamp
 		}
 	}
-	//  let us abort the transaction after fetching the matching records
-	txn.Abort()
 
-	// short circuit the operation when there are no records
-	if len(journals) == 0 {
-		return nil, nil
-	}
-
-	// create a set to hold the unique list of shard numbers
-	shards := goset.NewSet[uint64]()
-	// iterate the list of journals and extract the shard numbers
-	for _, journal := range journals {
-		shards.Add(journal.ShardNumber)
-	}
-
-	// return the list
-	return shards.ToSlice(), nil
+	return offsets, nil
 }
 
 // toProto converts a byte array given its manifest into a valid proto message

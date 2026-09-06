@@ -83,10 +83,10 @@ func TestEventsStore(t *testing.T) {
 		assert.NotNil(t, actual)
 		assert.True(t, proto.Equal(journal, actual))
 
-		// assert the number of shards
-		shards, err := store.ShardNumbers(ctx)
+		// assert the shard offsets
+		shardOffsets, err := store.ShardOffsets(ctx)
 		assert.NoError(t, err)
-		assert.Len(t, shards, 1)
+		assert.Equal(t, map[uint64]int64{shardNumber: journal.GetTimestamp()}, shardOffsets)
 
 		err = store.Disconnect(ctx)
 		assert.NoError(t, err)
@@ -243,4 +243,42 @@ func TestEventsStore(t *testing.T) {
 		err = store.Disconnect(ctx)
 		assert.NoError(t, err)
 	})
+}
+
+func TestShardOffsets(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	t.Run("not connected", func(t *testing.T) {
+		other := NewEventsStore()
+		_, err := other.ShardOffsets(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("empty journal yields an empty map", func(t *testing.T) {
+		offsets, err := store.ShardOffsets(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, offsets)
+		assert.Empty(t, offsets)
+	})
+
+	t.Run("every shard maps to the timestamp of its most recent event", func(t *testing.T) {
+		event, err := anypb.New(&testpb.AccountCredited{})
+		require.NoError(t, err)
+
+		events := []*egopb.Event{
+			{PersistenceId: "persistence-1", SequenceNumber: 1, Event: event, Timestamp: 100, Shard: 1},
+			{PersistenceId: "persistence-1", SequenceNumber: 2, Event: event, Timestamp: 300, Shard: 1},
+			{PersistenceId: "persistence-2", SequenceNumber: 1, Event: event, Timestamp: 200, Shard: 2},
+		}
+		require.NoError(t, store.WriteEvents(ctx, events))
+
+		offsets, err := store.ShardOffsets(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, map[uint64]int64{1: 300, 2: 200}, offsets)
+	})
+
+	require.NoError(t, store.Disconnect(ctx))
 }

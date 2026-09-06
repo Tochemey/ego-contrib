@@ -91,7 +91,7 @@ func main() {
 go test ./...
 ```
 
-CI pipelines can also run the repository-level `earthly +test` target if Earthly is installed.
+From the repository root, `make test/eventstore/memory` runs the same suite through the shared Makefile.
 
 ## Limitations
 - Not suitable for production; data vanishes on process exit (and by default on `Disconnect`)

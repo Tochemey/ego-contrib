@@ -29,6 +29,7 @@ import (
 	"sync"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/tochemey/ego/v4/egopb"
@@ -46,13 +47,24 @@ var (
 	}
 
 	tableName = "states_store"
+
+	// errNotConnected is returned when an operation runs against a store that is not connected
+	errNotConnected = errors.New("durable store is not connected")
 )
 
-// DurableStore implements the DurableStore interface
-// and helps persist events in a database database
+// DurableStore implements the persistence.StateStore interface
+// and helps persist durable states in a postgres database
 type DurableStore struct {
-	db database
-	sb sq.StatementBuilderType
+	// config holds the settings used to build the pool.
+	// It is only set when the store owns its pool.
+	config *Config
+	// pool runs the queries. It is either built from config in Connect
+	// or supplied by the caller through NewDurableStoreWithPool.
+	pool Pool
+	// owned is the pool built by the store from config.
+	// It is nil when the pool was supplied by the caller, in which case the store never closes it.
+	owned *pgxpool.Pool
+	sb    sq.StatementBuilderType
 	// guards connection state transitions
 	mu        sync.Mutex
 	connected bool
@@ -61,17 +73,29 @@ type DurableStore struct {
 // enforce interface implementation
 var _ persistence.StateStore = (*DurableStore)(nil)
 
-// NewDurableStore creates a new instance of StateStore
+// NewDurableStore creates a durable store that builds and owns its own connection pool.
+// The pool is opened by Connect and closed by Disconnect.
 func NewDurableStore(config *Config) *DurableStore {
-	// create the underlying db connection
-	db := newDatabase(newConfig(config))
 	return &DurableStore{
-		db: db,
-		sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		config: config.sanitize(),
+		sb:     sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
 	}
 }
 
-// Connect connects to the underlying postgres database
+// NewDurableStoreWithPool creates a durable store backed by a pool supplied by the caller.
+// The caller keeps ownership of the pool: Connect only verifies it is reachable and
+// Disconnect never closes it, so the same pool can be shared with other stores
+// and with the rest of the application.
+func NewDurableStoreWithPool(pool Pool) *DurableStore {
+	return &DurableStore{
+		pool: pool,
+		sb:   sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+	}
+}
+
+// Connect connects to the underlying postgres database.
+// When the store owns its pool, the pool is created here. When the pool was supplied
+// by the caller, Connect only verifies the database is reachable.
 func (s *DurableStore) Connect(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,16 +104,32 @@ func (s *DurableStore) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.db.Connect(ctx); err != nil {
-		return err
+	if s.config != nil {
+		pool, err := newPool(ctx, s.config)
+		if err != nil {
+			return err
+		}
+		s.owned = pool
+		s.pool = pool
+		s.connected = true
+		return nil
+	}
+
+	if s.pool == nil {
+		return errors.New("durable store pool is not defined")
+	}
+
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("failed to ping the database connection: %w", err)
 	}
 
 	s.connected = true
 	return nil
 }
 
-// Disconnect disconnects from the underlying postgres database
-func (s *DurableStore) Disconnect(ctx context.Context) error {
+// Disconnect disconnects from the underlying postgres database.
+// The pool is only closed when it was built by the store.
+func (s *DurableStore) Disconnect(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -97,8 +137,10 @@ func (s *DurableStore) Disconnect(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.db.Disconnect(ctx); err != nil {
-		return err
+	if s.owned != nil {
+		s.owned.Close()
+		s.owned = nil
+		s.pool = nil
 	}
 
 	s.connected = false
@@ -107,27 +149,39 @@ func (s *DurableStore) Disconnect(ctx context.Context) error {
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 func (s *DurableStore) Ping(ctx context.Context) error {
-	s.mu.Lock()
-	if !s.connected {
-		s.mu.Unlock()
+	pool, err := s.activePool()
+	if err != nil {
 		return s.Connect(ctx)
 	}
-	s.mu.Unlock()
+	return pool.Ping(ctx)
+}
 
-	return s.db.Ping(ctx)
+// activePool returns the pool to run queries against, or an error when the store is not connected
+func (s *DurableStore) activePool() (Pool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
+		return nil, errNotConnected
+	}
+	return s.pool, nil
 }
 
 // WriteState writes a durable state into the underlying postgres database
 func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState) error {
-	if !s.isConnected() {
-		return errors.New("durable store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
 	if state == nil || proto.Equal(state, &egopb.DurableState{}) {
 		return nil
 	}
 
-	bytea, _ := proto.Marshal(state.GetResultingState())
+	bytea, err := proto.Marshal(state.GetResultingState())
+	if err != nil {
+		return fmt.Errorf("failed to marshal the durable state: %w", err)
+	}
 	manifest := string(state.GetResultingState().ProtoReflect().Descriptor().FullName())
 
 	statement := s.sb.
@@ -154,7 +208,7 @@ func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState
 		return fmt.Errorf("unable to build sql insert statement: %w", err)
 	}
 
-	if _, err = s.db.Exec(ctx, query, args...); err != nil {
+	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to record durable state: %w", err)
 	}
 
@@ -163,8 +217,9 @@ func (s *DurableStore) WriteState(ctx context.Context, state *egopb.DurableState
 
 // GetLatestState fetches the latest durable state of a persistenceID
 func (s *DurableStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
-	if !s.isConnected() {
-		return nil, errors.New("durable store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
 	statement := s.sb.
@@ -178,9 +233,8 @@ func (s *DurableStore) GetLatestState(ctx context.Context, persistenceID string)
 	}
 
 	row := new(row)
-	err = s.db.Select(ctx, row, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the latest event from the database: %w", err)
+	if err := selectOne(ctx, pool, row, query, args...); err != nil {
+		return nil, fmt.Errorf("failed to fetch the latest durable state from the database: %w", err)
 	}
 
 	if row.PersistenceID == "" {
@@ -188,11 +242,4 @@ func (s *DurableStore) GetLatestState(ctx context.Context, persistenceID string)
 	}
 
 	return row.ToDurableState()
-}
-
-// isConnected returns whether the store is currently connected
-func (s *DurableStore) isConnected() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.connected
 }

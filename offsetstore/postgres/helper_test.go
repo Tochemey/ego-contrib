@@ -24,13 +24,23 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"net"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 
-	postgres "github.com/tochemey/ego-contrib/offsetstore/postgres/internal"
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/lib/pq" //nolint
+	testcontainers "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var testContainer *postgres.TestContainer
+var testContainer *TestContainer
 
 const (
 	testUser             = "test"
@@ -42,7 +52,7 @@ const (
 // making use of the postgres database container
 func TestMain(m *testing.M) {
 	// set the test container
-	testContainer = postgres.NewTestContainer(testDatabase, testUser, testDatabasePassword)
+	testContainer = NewTestContainer(testDatabase, testUser, testDatabasePassword)
 	// execute the tests
 	code := m.Run()
 	// free resources
@@ -51,8 +61,20 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// dbHandle returns a test db
-func dbHandle(ctx context.Context) (*postgres.TestDB, error) {
+// testConfig returns a store configuration pointing to the test container
+func testConfig() *Config {
+	return &Config{
+		DBHost:     testContainer.Host(),
+		DBPort:     testContainer.Port(),
+		DBName:     testDatabase,
+		DBUser:     testUser,
+		DBPassword: testDatabasePassword,
+		DBSchema:   testContainer.Schema(),
+	}
+}
+
+// dbHandle returns a connected test db
+func dbHandle(ctx context.Context) (*TestDB, error) {
 	db := testContainer.GetTestDB()
 	if err := db.Connect(ctx); err != nil {
 		return nil, err
@@ -60,17 +82,260 @@ func dbHandle(ctx context.Context) (*postgres.TestDB, error) {
 	return db, nil
 }
 
+// TestContainer helps creates a database docker container to
+// run unit tests
+type TestContainer struct {
+	host   string
+	port   int
+	schema string
+
+	container testcontainers.Container
+
+	// connection credentials
+	dbUser string
+	dbName string
+	dbPass string
+}
+
+// NewTestContainer create a database test container useful for unit and integration tests
+// This function will exit when there is an error.Call this function inside your SetupTest to create the container before each test.
+func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
+	ctx := context.Background()
+	tcContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "postgres:11",
+			ExposedPorts: []string{"5432/tcp"},
+			Env: map[string]string{
+				"POSTGRES_PASSWORD": dbPassword,
+				"POSTGRES_USER":     dbUser,
+				"POSTGRES_DB":       dbName,
+			},
+			Cmd: []string{
+				"postgres", "-c", "log_statement=all", "-c", "log_connections=on", "-c", "log_disconnections=on",
+			},
+			WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(120 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		log.Fatalf("Could not start container: %s", err)
+	}
+
+	host, err := tcContainer.Host(ctx)
+	if err != nil {
+		log.Fatalf("Could not get container host: %s", err)
+	}
+	mappedPort, err := tcContainer.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		log.Fatalf("Could not get container port: %s", err)
+	}
+	hostAndPort := net.JoinHostPort(host, mappedPort.Port())
+	databaseURL := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", dbUser, dbPassword, hostAndPort, dbName)
+
+	if err := waitForPostgres(databaseURL, 120*time.Second); err != nil {
+		log.Fatalf("Could not connect to docker: %s", err)
+	}
+
+	// create an instance of TestContainer
+	container := new(TestContainer)
+	container.container = tcContainer
+	host, port, err := splitHostAndPort(hostAndPort)
+	if err != nil {
+		log.Fatalf("Unable to get database host and port: %s", err)
+	}
+	// set the container host, port and schema
+	container.dbName = dbName
+	container.dbUser = dbUser
+	container.dbPass = dbPassword
+	container.host = host
+	container.port = port
+	container.schema = "public"
+	return container
+}
+
+// GetTestDB returns a database TestDB that can be used in the tests
+// to perform some database queries
+func (c *TestContainer) GetTestDB() *TestDB {
+	config := &Config{
+		DBHost:     c.host,
+		DBPort:     c.port,
+		DBName:     c.dbName,
+		DBUser:     c.dbUser,
+		DBPassword: c.dbPass,
+		DBSchema:   c.schema,
+	}
+	return &TestDB{config: config.sanitize()}
+}
+
+// Host return the host of the test container
+func (c *TestContainer) Host() string {
+	return c.host
+}
+
+// Port return the port of the test container
+func (c *TestContainer) Port() int {
+	return c.port
+}
+
+// Schema return the test schema of the test container
+func (c *TestContainer) Schema() string {
+	return c.schema
+}
+
+// Cleanup frees the resource by removing a container and linked volumes from docker.
+// Call this function inside your TearDownSuite to clean-up resources after each test
+func (c *TestContainer) Cleanup() {
+	ctx := context.Background()
+	if err := c.container.Terminate(ctx); err != nil {
+		log.Fatalf("Could not terminate container: %s", err)
+	}
+}
+
+// TestDB is used in tests to run queries against the test database
+type TestDB struct {
+	config *Config
+	*pgxpool.Pool
+}
+
+// Connect opens the underlying connection pool
+func (c *TestDB) Connect(ctx context.Context) error {
+	pool, err := newPool(ctx, c.config)
+	if err != nil {
+		return err
+	}
+	c.Pool = pool
+	return nil
+}
+
+// Disconnect closes the underlying connection pool
+func (c *TestDB) Disconnect(context.Context) error {
+	if c.Pool != nil {
+		c.Pool.Close()
+	}
+	return nil
+}
+
+// Select fetches a single row and scans it into dst
+func (c *TestDB) Select(ctx context.Context, dst any, query string, args ...any) error {
+	return selectOne(ctx, c.Pool, dst, query, args...)
+}
+
+// SelectAll fetches all the matching rows and scans them into dst
+func (c *TestDB) SelectAll(ctx context.Context, dst any, query string, args ...any) error {
+	return selectAll(ctx, c.Pool, dst, query, args...)
+}
+
+// DropTable utility function to drop a database table
+func (c *TestDB) DropTable(ctx context.Context, tableName string) error {
+	var dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE;", tableName)
+	_, err := c.Exec(ctx, dropSQL)
+	return err
+}
+
+// TableExists utility function to help check the existence of table in database
+// tableName is in the format: <schemaName.tableName>. e.g: public.users
+func (c *TestDB) TableExists(ctx context.Context, tableName string) error {
+	var stmt = fmt.Sprintf("SELECT to_regclass('%s');", tableName)
+	_, err := c.Exec(ctx, stmt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
+// Count utility function to help count the number of rows in a database table.
+// tableName is in the format: <schemaName.tableName>. e.g: public.users
+// It returns -1 when there is an error
+func (c *TestDB) Count(ctx context.Context, tableName string) (int, error) {
+	var count int
+	if err := c.Select(ctx, &count, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)); err != nil {
+		return -1, err
+	}
+	return count, nil
+}
+
+// CreateSchema helps create a test schema in a database database
+func (c *TestDB) CreateSchema(ctx context.Context, schemaName string) error {
+	stmt := fmt.Sprintf("CREATE SCHEMA %s", schemaName)
+	if _, err := c.Exec(ctx, stmt); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SchemaExists helps check the existence of a database schema. Very useful when implementing tests
+func (c *TestDB) SchemaExists(ctx context.Context, schemaName string) (bool, error) {
+	stmt := fmt.Sprintf("SELECT schema_name FROM information_schema.schemata WHERE schema_name = '%s';", schemaName)
+	var check string
+	if err := c.Select(ctx, &check, stmt); err != nil {
+		return false, err
+	}
+
+	// this redundant check is necessary
+	if check == schemaName {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// DropSchema utility function to drop a database schema
+func (c *TestDB) DropSchema(ctx context.Context, schemaName string) error {
+	var dropSQL = fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE;", schemaName)
+	_, err := c.Exec(ctx, dropSQL)
+	return err
+}
+
+func waitForPostgres(databaseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		db, err := sql.Open("postgres", databaseURL)
+		if err == nil {
+			pingErr := db.Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return nil
+			}
+			err = pingErr
+		}
+
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// splitHostAndPort helps get the host address and port of and address
+func splitHostAndPort(hostAndPort string) (string, int, error) {
+	host, port, err := net.SplitHostPort(hostAndPort)
+	if err != nil {
+		return "", -1, err
+	}
+
+	portValue, err := strconv.Atoi(port)
+	if err != nil {
+		return "", -1, err
+	}
+
+	return host, portValue, nil
+}
+
 // SchemaUtils help create the various test tables in unit/integration tests
 type SchemaUtils struct {
-	db *postgres.TestDB
+	db *TestDB
 }
 
 // NewSchemaUtils creates an instance of SchemaUtils
-func NewSchemaUtils(db *postgres.TestDB) *SchemaUtils {
+func NewSchemaUtils(db *TestDB) *SchemaUtils {
 	return &SchemaUtils{db: db}
 }
 
-// CreateTable creates the event store table used for unit tests
+// CreateTable creates the offset store table used for unit tests
 func (d SchemaUtils) CreateTable(ctx context.Context) error {
 	schemaDDL := `
 	DROP TABLE IF EXISTS offsets_store;
@@ -79,7 +344,7 @@ func (d SchemaUtils) CreateTable(ctx context.Context) error {
 	    projection_name VARCHAR(255) NOT NULL,
 	    shard_number    BIGINT       NOT NULL,
 	    current_offset  BIGINT       NOT NULL,
-	    timestamp    	  BIGINT       NOT NULL,
+	    timestamp       BIGINT       NOT NULL,
 	    PRIMARY KEY (projection_name, shard_number)
 	);
 	`
@@ -90,5 +355,5 @@ func (d SchemaUtils) CreateTable(ctx context.Context) error {
 // DropTable drop the table used in unit test
 // This is useful for resource cleanup after a unit test
 func (d SchemaUtils) DropTable(ctx context.Context) error {
-	return d.db.DropTable(ctx, "offsets_store")
+	return d.db.DropTable(ctx, tableName)
 }

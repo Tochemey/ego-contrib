@@ -29,6 +29,7 @@ import (
 	"sync"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tochemey/ego/v4/egopb"
 	"github.com/tochemey/ego/v4/persistence"
 	"google.golang.org/protobuf/proto"
@@ -46,13 +47,24 @@ var (
 	}
 
 	tableName = "snapshots_store"
+
+	// errNotConnected is returned when an operation runs against a store that is not connected
+	errNotConnected = errors.New("snapshot store is not connected")
 )
 
 // SnapshotStore implements the persistence.SnapshotStore interface
 // and helps persist entity snapshots in a postgres database
 type SnapshotStore struct {
-	db database
-	sb sq.StatementBuilderType
+	// config holds the settings used to build the pool.
+	// It is only set when the store owns its pool.
+	config *Config
+	// pool runs the queries. It is either built from config in Connect
+	// or supplied by the caller through NewSnapshotStoreWithPool.
+	pool Pool
+	// owned is the pool built by the store from config.
+	// It is nil when the pool was supplied by the caller, in which case the store never closes it.
+	owned *pgxpool.Pool
+	sb    sq.StatementBuilderType
 	// guards connection state transitions
 	mu        sync.Mutex
 	connected bool
@@ -61,17 +73,29 @@ type SnapshotStore struct {
 // enforce interface implementation
 var _ persistence.SnapshotStore = (*SnapshotStore)(nil)
 
-// NewSnapshotStore creates a new instance of SnapshotStore
+// NewSnapshotStore creates a snapshot store that builds and owns its own connection pool.
+// The pool is opened by Connect and closed by Disconnect.
 func NewSnapshotStore(config *Config) *SnapshotStore {
-	// create the underlying db connection
-	db := newDatabase(newConfig(config))
 	return &SnapshotStore{
-		db: db,
-		sb: sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		config: config.sanitize(),
+		sb:     sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
 	}
 }
 
-// Connect connects to the underlying postgres database
+// NewSnapshotStoreWithPool creates a snapshot store backed by a pool supplied by the caller.
+// The caller keeps ownership of the pool: Connect only verifies it is reachable and
+// Disconnect never closes it, so the same pool can be shared with other stores
+// and with the rest of the application.
+func NewSnapshotStoreWithPool(pool Pool) *SnapshotStore {
+	return &SnapshotStore{
+		pool: pool,
+		sb:   sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+	}
+}
+
+// Connect connects to the underlying postgres database.
+// When the store owns its pool, the pool is created here. When the pool was supplied
+// by the caller, Connect only verifies the database is reachable.
 func (s *SnapshotStore) Connect(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,16 +104,32 @@ func (s *SnapshotStore) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.db.Connect(ctx); err != nil {
-		return err
+	if s.config != nil {
+		pool, err := newPool(ctx, s.config)
+		if err != nil {
+			return err
+		}
+		s.owned = pool
+		s.pool = pool
+		s.connected = true
+		return nil
+	}
+
+	if s.pool == nil {
+		return errors.New("snapshot store pool is not defined")
+	}
+
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("failed to ping the database connection: %w", err)
 	}
 
 	s.connected = true
 	return nil
 }
 
-// Disconnect disconnects from the underlying postgres database
-func (s *SnapshotStore) Disconnect(ctx context.Context) error {
+// Disconnect disconnects from the underlying postgres database.
+// The pool is only closed when it was built by the store.
+func (s *SnapshotStore) Disconnect(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -97,8 +137,10 @@ func (s *SnapshotStore) Disconnect(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.db.Disconnect(ctx); err != nil {
-		return err
+	if s.owned != nil {
+		s.owned.Close()
+		s.owned = nil
+		s.pool = nil
 	}
 
 	s.connected = false
@@ -107,27 +149,39 @@ func (s *SnapshotStore) Disconnect(ctx context.Context) error {
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 func (s *SnapshotStore) Ping(ctx context.Context) error {
-	s.mu.Lock()
-	if !s.connected {
-		s.mu.Unlock()
+	pool, err := s.activePool()
+	if err != nil {
 		return s.Connect(ctx)
 	}
-	s.mu.Unlock()
+	return pool.Ping(ctx)
+}
 
-	return s.db.Ping(ctx)
+// activePool returns the pool to run queries against, or an error when the store is not connected
+func (s *SnapshotStore) activePool() (Pool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
+		return nil, errNotConnected
+	}
+	return s.pool, nil
 }
 
 // WriteSnapshot persists a snapshot for a given persistenceID.
 func (s *SnapshotStore) WriteSnapshot(ctx context.Context, snapshot *egopb.Snapshot) error {
-	if !s.isConnected() {
-		return errors.New("snapshot store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
 	if snapshot == nil || proto.Equal(snapshot, &egopb.Snapshot{}) {
 		return nil
 	}
 
-	bytea, _ := proto.Marshal(snapshot.GetState())
+	bytea, err := proto.Marshal(snapshot.GetState())
+	if err != nil {
+		return fmt.Errorf("failed to marshal the snapshot state: %w", err)
+	}
 	manifest := string(snapshot.GetState().ProtoReflect().Descriptor().FullName())
 
 	statement := s.sb.
@@ -155,7 +209,7 @@ func (s *SnapshotStore) WriteSnapshot(ctx context.Context, snapshot *egopb.Snaps
 		return fmt.Errorf("unable to build sql upsert statement: %w", err)
 	}
 
-	if _, err = s.db.Exec(ctx, query, args...); err != nil {
+	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
@@ -165,8 +219,9 @@ func (s *SnapshotStore) WriteSnapshot(ctx context.Context, snapshot *egopb.Snaps
 // GetLatestSnapshot fetches the latest snapshot for a given persistenceID.
 // Returns nil when no snapshot is found.
 func (s *SnapshotStore) GetLatestSnapshot(ctx context.Context, persistenceID string) (*egopb.Snapshot, error) {
-	if !s.isConnected() {
-		return nil, errors.New("snapshot store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
 	statement := s.sb.
@@ -182,12 +237,10 @@ func (s *SnapshotStore) GetLatestSnapshot(ctx context.Context, persistenceID str
 	}
 
 	row := new(snapshotRow)
-	err = s.db.Select(ctx, row, query, args...)
-	if err != nil {
+	if err := selectOne(ctx, pool, row, query, args...); err != nil {
 		return nil, fmt.Errorf("failed to fetch the latest snapshot from the database: %w", err)
 	}
 
-	// no record found
 	if row.PersistenceID == "" {
 		return nil, nil
 	}
@@ -197,8 +250,9 @@ func (s *SnapshotStore) GetLatestSnapshot(ctx context.Context, persistenceID str
 
 // DeleteSnapshots deletes all snapshots for a given persistenceID up to a given sequence number (inclusive).
 func (s *SnapshotStore) DeleteSnapshots(ctx context.Context, persistenceID string, toSequenceNumber uint64) error {
-	if !s.isConnected() {
-		return errors.New("snapshot store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
 	statement := s.sb.
@@ -211,16 +265,9 @@ func (s *SnapshotStore) DeleteSnapshots(ctx context.Context, persistenceID strin
 		return fmt.Errorf("unable to build sql delete statement: %w", err)
 	}
 
-	if _, err = s.db.Exec(ctx, query, args...); err != nil {
+	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to delete snapshots: %w", err)
 	}
 
 	return nil
-}
-
-// isConnected returns whether the store is currently connected
-func (s *SnapshotStore) isConnected() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.connected
 }

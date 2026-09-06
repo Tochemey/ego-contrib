@@ -1,0 +1,19 @@
+// Workspace for local development: it lets the IDE and go commands run from the
+// repository root see every module at once (go build ./..., go vet ./...).
+//
+// The Makefile and the CI pipelines set GOWORK=off so each module is built,
+// linted and tested on its own with its vendored dependencies, exactly as it is
+// consumed. Add new modules here, in the Makefile and in the CI matrices.
+go 1.26.0
+
+use (
+	./durablestore/cassandra
+	./durablestore/dynamodb
+	./durablestore/memory
+	./durablestore/postgres
+	./eventstore/memory
+	./eventstore/postgres
+	./offsetstore/memory
+	./offsetstore/postgres
+	./snapshotstore/postgres
+)

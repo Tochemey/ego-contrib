@@ -29,13 +29,58 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
+	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq" //nolint
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+var testContainer *TestContainer
+
+const (
+	testUser             = "test"
+	testDatabase         = "testdb"
+	testDatabasePassword = "test"
+)
+
+// TestMain will spawn a postgres database container that will be used for all tests
+// making use of the postgres database container
+func TestMain(m *testing.M) {
+	// set the test container
+	testContainer = NewTestContainer(testDatabase, testUser, testDatabasePassword)
+	// execute the tests
+	code := m.Run()
+	// free resources
+	testContainer.Cleanup()
+	// exit the tests
+	os.Exit(code)
+}
+
+// testConfig returns a store configuration pointing to the test container
+func testConfig() *Config {
+	return &Config{
+		DBHost:     testContainer.Host(),
+		DBPort:     testContainer.Port(),
+		DBName:     testDatabase,
+		DBUser:     testUser,
+		DBPassword: testDatabasePassword,
+		DBSchema:   testContainer.Schema(),
+	}
+}
+
+// dbHandle returns a connected test db
+func dbHandle(ctx context.Context) (*TestDB, error) {
+	db := testContainer.GetTestDB()
+	if err := db.Connect(ctx); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
 
 // TestContainer helps creates a database docker container to
 // run unit tests
@@ -110,57 +155,78 @@ func NewTestContainer(dbName, dbUser, dbPassword string) *TestContainer {
 
 // GetTestDB returns a database TestDB that can be used in the tests
 // to perform some database queries
-func (c TestContainer) GetTestDB() *TestDB {
-	return &TestDB{
-		newDatabase(&dbConfig{
-			DBHost:                c.host,
-			DBPort:                c.port,
-			DBName:                c.dbName,
-			DBUser:                c.dbUser,
-			DBPassword:            c.dbPass,
-			DBSchema:              c.schema,
-			DBSSLMode:             "disable",
-			MaxConnections:        4,
-			MinConnections:        0,
-			MaxConnectionLifetime: time.Hour,
-			MaxConnIdleTime:       30 * time.Minute,
-			HealthCheckPeriod:     time.Minute,
-		}),
+func (c *TestContainer) GetTestDB() *TestDB {
+	config := &Config{
+		DBHost:     c.host,
+		DBPort:     c.port,
+		DBName:     c.dbName,
+		DBUser:     c.dbUser,
+		DBPassword: c.dbPass,
+		DBSchema:   c.schema,
 	}
+	return &TestDB{config: config.sanitize()}
 }
 
 // Host return the host of the test container
-func (c TestContainer) Host() string {
+func (c *TestContainer) Host() string {
 	return c.host
 }
 
 // Port return the port of the test container
-func (c TestContainer) Port() int {
+func (c *TestContainer) Port() int {
 	return c.port
 }
 
 // Schema return the test schema of the test container
-func (c TestContainer) Schema() string {
+func (c *TestContainer) Schema() string {
 	return c.schema
 }
 
 // Cleanup frees the resource by removing a container and linked volumes from docker.
 // Call this function inside your TearDownSuite to clean-up resources after each test
-func (c TestContainer) Cleanup() {
+func (c *TestContainer) Cleanup() {
 	ctx := context.Background()
 	if err := c.container.Terminate(ctx); err != nil {
 		log.Fatalf("Could not terminate container: %s", err)
 	}
 }
 
-// TestDB is used in test to perform
-// some database queries
+// TestDB is used in tests to run queries against the test database
 type TestDB struct {
-	database
+	config *Config
+	*pgxpool.Pool
+}
+
+// Connect opens the underlying connection pool
+func (c *TestDB) Connect(ctx context.Context) error {
+	pool, err := newPool(ctx, c.config)
+	if err != nil {
+		return err
+	}
+	c.Pool = pool
+	return nil
+}
+
+// Disconnect closes the underlying connection pool
+func (c *TestDB) Disconnect(context.Context) error {
+	if c.Pool != nil {
+		c.Pool.Close()
+	}
+	return nil
+}
+
+// Select fetches a single row and scans it into dst
+func (c *TestDB) Select(ctx context.Context, dst any, query string, args ...any) error {
+	return selectOne(ctx, c.Pool, dst, query, args...)
+}
+
+// SelectAll fetches all the matching rows and scans them into dst
+func (c *TestDB) SelectAll(ctx context.Context, dst any, query string, args ...any) error {
+	return selectAll(ctx, c.Pool, dst, query, args...)
 }
 
 // DropTable utility function to drop a database table
-func (c TestDB) DropTable(ctx context.Context, tableName string) error {
+func (c *TestDB) DropTable(ctx context.Context, tableName string) error {
 	var dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE;", tableName)
 	_, err := c.Exec(ctx, dropSQL)
 	return err
@@ -168,7 +234,7 @@ func (c TestDB) DropTable(ctx context.Context, tableName string) error {
 
 // TableExists utility function to help check the existence of table in database
 // tableName is in the format: <schemaName.tableName>. e.g: public.users
-func (c TestDB) TableExists(ctx context.Context, tableName string) error {
+func (c *TestDB) TableExists(ctx context.Context, tableName string) error {
 	var stmt = fmt.Sprintf("SELECT to_regclass('%s');", tableName)
 	_, err := c.Exec(ctx, stmt)
 	if err != nil {
@@ -184,12 +250,44 @@ func (c TestDB) TableExists(ctx context.Context, tableName string) error {
 // Count utility function to help count the number of rows in a database table.
 // tableName is in the format: <schemaName.tableName>. e.g: public.users
 // It returns -1 when there is an error
-func (c TestDB) Count(ctx context.Context, tableName string) (int, error) {
+func (c *TestDB) Count(ctx context.Context, tableName string) (int, error) {
 	var count int
 	if err := c.Select(ctx, &count, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)); err != nil {
 		return -1, err
 	}
 	return count, nil
+}
+
+// CreateSchema helps create a test schema in a database database
+func (c *TestDB) CreateSchema(ctx context.Context, schemaName string) error {
+	stmt := fmt.Sprintf("CREATE SCHEMA %s", schemaName)
+	if _, err := c.Exec(ctx, stmt); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SchemaExists helps check the existence of a database schema. Very useful when implementing tests
+func (c *TestDB) SchemaExists(ctx context.Context, schemaName string) (bool, error) {
+	stmt := fmt.Sprintf("SELECT schema_name FROM information_schema.schemata WHERE schema_name = '%s';", schemaName)
+	var check string
+	if err := c.Select(ctx, &check, stmt); err != nil {
+		return false, err
+	}
+
+	// this redundant check is necessary
+	if check == schemaName {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// DropSchema utility function to drop a database schema
+func (c *TestDB) DropSchema(ctx context.Context, schemaName string) error {
+	var dropSQL = fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE;", schemaName)
+	_, err := c.Exec(ctx, dropSQL)
+	return err
 }
 
 func waitForPostgres(databaseURL string, timeout time.Duration) error {

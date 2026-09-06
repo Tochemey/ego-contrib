@@ -24,7 +24,9 @@ package postgres
 
 import "time"
 
-// Config defines the postgres events store configuration
+// Config defines the settings the durable store uses to build its own connection pool.
+// It is consumed by NewDurableStore. When the pool is supplied by the caller through
+// NewDurableStoreWithPool, this configuration is not needed.
 type Config struct {
 	DBHost     string // DBHost represents the database host
 	DBPort     int    // DBPort is the database port
@@ -32,11 +34,39 @@ type Config struct {
 	DBUser     string // DBUser is the database user used to connect
 	DBPassword string // DBPassword is the database password
 	DBSchema   string // DBSchema represents the database schema
-	DBSSLMode  string // DBSSLMode represents the database SSL mode (e.g. "disable", "require", "verify-ca", "verify-full")
+	DBSSLMode  string // DBSSLMode represents the database SSL mode (e.g. "disable", "require", "verify-ca", "verify-full"). Defaults to "disable".
 
 	MaxConnections        int           // MaxConnections represents the number of max connections in the pool. Defaults to 4.
 	MinConnections        int           // MinConnections represents the number of minimum connections in the pool. Defaults to 0.
 	MaxConnectionLifetime time.Duration // MaxConnectionLifetime represents the duration since creation after which a connection will be automatically closed. Defaults to 1 hour.
 	MaxConnIdleTime       time.Duration // MaxConnIdleTime is the duration after which an idle connection will be automatically closed by the health check. Defaults to 30 minutes.
 	HealthCheckPeriod     time.Duration // HealthCheckPeriod is the duration between checks of the health of idle connections. Defaults to 1 minute.
+}
+
+// sanitize returns a copy of the configuration with the defaults applied.
+// The receiver is left untouched.
+func (c *Config) sanitize() *Config {
+	cfg := *c
+
+	if cfg.DBSSLMode == "" {
+		cfg.DBSSLMode = "disable"
+	}
+
+	if cfg.MaxConnections == 0 {
+		cfg.MaxConnections = 4
+	}
+
+	if cfg.MaxConnectionLifetime == 0 {
+		cfg.MaxConnectionLifetime = time.Hour
+	}
+
+	if cfg.MaxConnIdleTime == 0 {
+		cfg.MaxConnIdleTime = 30 * time.Minute
+	}
+
+	if cfg.HealthCheckPeriod == 0 {
+		cfg.HealthCheckPeriod = time.Minute
+	}
+
+	return &cfg
 }

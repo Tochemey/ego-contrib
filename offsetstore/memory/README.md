@@ -70,7 +70,7 @@ func main() {
 go test ./...
 ```
 
-Earthly users can trigger the module tests with `earthly +test` from the repository root.
+From the repository root, `make test/offsetstore/memory` runs the same suite through the shared Makefile.
 
 ## Limitations
 - Offsets live only in memory; production systems should use a durable backend

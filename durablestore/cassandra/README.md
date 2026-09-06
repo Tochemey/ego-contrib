@@ -109,7 +109,7 @@ func main() {
 ## Testing
 - Local stack: `go test ./...`
 - Docker-based harness: `durablestore/cassandra/helper_test.go` spins up Cassandra 5.0.6 using Testcontainers-Go
-- CI-friendly recipe: run `earthly +test` from the repository root if you already use Earthly locally
+- Repository-wide recipe: run `make test` from the repository root, or `make test/durablestore/cassandra` for this module only
 
 ## Operational Notes
 - `GetLatestState` returns `(nil, nil)` when no durable state exists

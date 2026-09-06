@@ -90,7 +90,7 @@ func main() {
 > **Tip:** DynamoDB keeps the protobuf manifests as strings. Ensure your protobuf packages are imported so their descriptors are registered in `protoregistry.GlobalTypes`; otherwise the store cannot rehydrate records.
 
 ## Testing
-- Local stack: `go test ./...` (or use the Earthly target defined in the repository root)
+- Local stack: `go test ./...` (or `make test/durablestore/dynamodb` from the repository root)
 - Integration: see `durablestore/dynamodb/testkit.go` for a Docker-based DynamoDB Local harness you can reuse in your suites
 
 ## Operational Notes

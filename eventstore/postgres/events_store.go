@@ -26,12 +26,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tochemey/ego/v4/egopb"
 	"github.com/tochemey/ego/v4/persistence"
-	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -49,92 +50,141 @@ var (
 	}
 
 	tableName = "events_store"
+
+	// errNotConnected is returned when an operation runs against a store that is not connected
+	errNotConnected = errors.New("journal store is not connected")
 )
 
-// EventsStore implements the EventsStore interface
-// and helps persist events in a database database
+// defaultInsertBatchSize is the number of events bulk-inserted per statement.
+// This keeps every statement below the postgres 65535 bind parameter limit.
+const defaultInsertBatchSize = 500
+
+// EventsStore implements the persistence.EventsStore interface
+// and helps persist events in a postgres database
 type EventsStore struct {
-	db database
-	sb sq.StatementBuilderType
-	// insertBatchSize represents the chunk of data to bulk insert.
-	// This helps avoid the postgres 65535 parameter limit.
-	// This is necessary because database uses a 32-bit int for binding input parameters and
-	// is not able to track anything larger.
-	// Note: Change this value when you know the size of data to bulk insert at once. Otherwise, you
-	// might encounter the postgres 65535 parameter limit error.
+	// config holds the settings used to build the pool.
+	// It is only set when the store owns its pool.
+	config *Config
+	// pool runs the queries. It is either built from config in Connect
+	// or supplied by the caller through NewEventsStoreWithPool.
+	pool Pool
+	// owned is the pool built by the store from config.
+	// It is nil when the pool was supplied by the caller, in which case the store never closes it.
+	owned *pgxpool.Pool
+	sb    sq.StatementBuilderType
+	// insertBatchSize represents the chunk of events to bulk insert per statement.
 	insertBatchSize int
-	// hold the connection state to avoid multiple connection of the same instance
-	connected *atomic.Bool
+	// guards connection state transitions
+	mu        sync.Mutex
+	connected bool
 }
 
 // enforce interface implementation
 var _ persistence.EventsStore = (*EventsStore)(nil)
 
-// NewEventsStore creates a new instance of PostgresEventStore
+// NewEventsStore creates an events store that builds and owns its own connection pool.
+// The pool is opened by Connect and closed by Disconnect.
 func NewEventsStore(config *Config) *EventsStore {
-	// create the underlying db connection
-	db := newDatabase(newConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName, config.DBSchema))
 	return &EventsStore{
-		db:              db,
+		config:          config.sanitize(),
 		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
-		insertBatchSize: 500,
-		connected:       atomic.NewBool(false),
+		insertBatchSize: defaultInsertBatchSize,
 	}
 }
 
-// Connect connects to the underlying postgres database
+// NewEventsStoreWithPool creates an events store backed by a pool supplied by the caller.
+// The caller keeps ownership of the pool: Connect only verifies it is reachable and
+// Disconnect never closes it, so the same pool can be shared with other stores
+// and with the rest of the application.
+func NewEventsStoreWithPool(pool Pool) *EventsStore {
+	return &EventsStore{
+		pool:            pool,
+		sb:              sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		insertBatchSize: defaultInsertBatchSize,
+	}
+}
+
+// Connect connects to the underlying postgres database.
+// When the store owns its pool, the pool is created here. When the pool was supplied
+// by the caller, Connect only verifies the database is reachable.
 func (s *EventsStore) Connect(ctx context.Context) error {
-	// check whether this instance of the journal is connected or not
-	if s.connected.Load() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.connected {
 		return nil
 	}
 
-	// connect to the underlying db
-	if err := s.db.Connect(ctx); err != nil {
-		return err
+	if s.config != nil {
+		pool, err := newPool(ctx, s.config)
+		if err != nil {
+			return err
+		}
+		s.owned = pool
+		s.pool = pool
+		s.connected = true
+		return nil
 	}
 
-	// set the connection status
-	s.connected.Store(true)
+	if s.pool == nil {
+		return errors.New("journal store pool is not defined")
+	}
 
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("failed to ping the database connection: %w", err)
+	}
+
+	s.connected = true
 	return nil
 }
 
-// Disconnect disconnects from the underlying postgres database
-func (s *EventsStore) Disconnect(ctx context.Context) error {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
+// Disconnect disconnects from the underlying postgres database.
+// The pool is only closed when it was built by the store.
+func (s *EventsStore) Disconnect(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
 		return nil
 	}
 
-	// disconnect the underlying database
-	if err := s.db.Disconnect(ctx); err != nil {
-		return err
+	if s.owned != nil {
+		s.owned.Close()
+		s.owned = nil
+		s.pool = nil
 	}
-	// set the connection status
-	s.connected.Store(false)
 
+	s.connected = false
 	return nil
 }
 
 // Ping verifies a connection to the database is still alive, establishing a connection if necessary.
 func (s *EventsStore) Ping(ctx context.Context) error {
-	// check whether we are connected or not
-	if !s.connected.Load() {
+	pool, err := s.activePool()
+	if err != nil {
 		return s.Connect(ctx)
 	}
+	return pool.Ping(ctx)
+}
 
-	return s.db.Ping(ctx)
+// activePool returns the pool to run queries against, or an error when the store is not connected
+func (s *EventsStore) activePool() (Pool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
+		return nil, errNotConnected
+	}
+	return s.pool, nil
 }
 
 // PersistenceIDs returns the distinct list of all the persistence ids in the journal store
 func (s *EventsStore) PersistenceIDs(ctx context.Context, pageSize uint64, pageToken string) (persistenceIDs []string, nextPageToken string, err error) {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return nil, "", errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, "", err
 	}
 
-	// create the database delete statement
 	statement := s.sb.
 		Select("persistence_id").
 		Distinct().
@@ -142,80 +192,79 @@ func (s *EventsStore) PersistenceIDs(ctx context.Context, pageSize uint64, pageT
 		Limit(pageSize).
 		OrderBy("persistence_id ASC")
 
-	// set the page token
 	if pageToken != "" {
 		statement = statement.Where(sq.Gt{"persistence_id": pageToken})
 	}
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
-	// handle the error
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to build the sql statement: %w", err)
 	}
 
-	// create the ds to hold the database record
 	type row struct {
 		PersistenceID string
 	}
 
-	// execute the query against the database
 	var rows []*row
-	err = s.db.SelectAll(ctx, &rows, query, args...)
-	if err != nil {
+	if err := selectAll(ctx, pool, &rows, query, args...); err != nil {
 		return nil, "", fmt.Errorf("failed to fetch the events from the database: %w", err)
 	}
 
-	// handle empty result set
 	if len(rows) == 0 {
 		return nil, "", nil
 	}
 
-	// grab the fetched records
 	persistenceIDs = make([]string, len(rows))
 	for index, row := range rows {
 		persistenceIDs[index] = row.PersistenceID
 	}
 
-	// set the next page token
 	nextPageToken = persistenceIDs[len(persistenceIDs)-1]
-
-	return
+	return persistenceIDs, nextPageToken, nil
 }
 
 // WriteEvents writes a bunch of events into the underlying postgres database
 func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) error {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
-	// check whether the journals list is empty
 	if len(events) == 0 {
-		// do nothing
 		return nil
 	}
 
-	// let us begin a database transaction to make sure we atomically write those events into the database
-	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	// return the error in case we are unable to get a database transaction
+	// begin a transaction to make sure the events are written atomically
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("failed to obtain a database transaction: %w", err)
 	}
 
-	// start creating the sql statement for insertion
+	if err := s.insertEvents(ctx, tx, events); err != nil {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return fmt.Errorf("unable to rollback db transaction: %w: %w", rollbackErr, err)
+		}
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to record events: %w", err)
+	}
+
+	return nil
+}
+
+// insertEvents bulk-inserts the events in batches within the given transaction
+func (s *EventsStore) insertEvents(ctx context.Context, tx pgx.Tx, events []*egopb.Event) error {
 	statement := s.sb.Insert(tableName).Columns(columns...)
 	for index, event := range events {
-		// serialize the event
 		eventBytes, err := proto.Marshal(event.GetEvent())
 		if err != nil {
 			return fmt.Errorf("failed to marshal event at index %d: %w", index, err)
 		}
 
-		// grab the manifest
 		eventManifest := string(event.GetEvent().ProtoReflect().Descriptor().FullName())
 
-		// build the insertion values
 		statement = statement.Values(
 			event.GetPersistenceId(),
 			event.GetSequenceNumber(),
@@ -229,72 +278,52 @@ func (s *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event) er
 		)
 
 		if (index+1)%s.insertBatchSize == 0 || index == len(events)-1 {
-			// get the SQL statement to run
 			query, args, err := statement.ToSql()
-			// handle the error while generating the SQL
 			if err != nil {
 				return fmt.Errorf("unable to build sql insert statement: %w", err)
 			}
-			// insert into the table
-			_, execErr := tx.Exec(ctx, query, args...)
-			if execErr != nil {
-				// attempt to roll back the transaction and log the error in case there is an error
-				if err = tx.Rollback(ctx); err != nil {
-					return fmt.Errorf("unable to rollback db transaction: %w", err)
-				}
-				// return the main error
-				return fmt.Errorf("failed to record events: %w", execErr)
+
+			if _, err := tx.Exec(ctx, query, args...); err != nil {
+				return fmt.Errorf("failed to record events: %w", err)
 			}
 
-			// reset the statement for the next bulk
+			// reset the statement for the next batch
 			statement = s.sb.Insert(tableName).Columns(columns...)
 		}
 	}
-
-	// commit the transaction
-	if commitErr := tx.Commit(ctx); commitErr != nil {
-		// return the commit error in case there is one
-		return fmt.Errorf("failed to record events: %w", commitErr)
-	}
-	// every looks good
 	return nil
 }
 
 // DeleteEvents deletes events from the postgres up to a given sequence number (inclusive)
 func (s *EventsStore) DeleteEvents(ctx context.Context, persistenceID string, toSequenceNumber uint64) error {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
-	// create the database delete statement
 	statement := s.sb.
 		Delete(tableName).
 		Where(sq.Eq{"persistence_id": persistenceID}).
 		Where(sq.LtOrEq{"sequence_number": toSequenceNumber})
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return fmt.Errorf("failed to build the delete events sql statement: %w", err)
 	}
 
-	// begin a transaction for the delete operation
-	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("failed to obtain a database transaction: %w", err)
 	}
 
-	// execute the sql statement within the transaction
 	if _, execErr := tx.Exec(ctx, query, args...); execErr != nil {
-		if err = tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("unable to rollback db transaction: %w", err)
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return fmt.Errorf("unable to rollback db transaction: %w: %w", rollbackErr, execErr)
 		}
 		return fmt.Errorf("failed to delete events from the database: %w", execErr)
 	}
 
-	// commit the transaction
-	if err = tx.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit delete events: %w", err)
 	}
 
@@ -303,12 +332,11 @@ func (s *EventsStore) DeleteEvents(ctx context.Context, persistenceID string, to
 
 // ReplayEvents fetches events for a given persistence ID from a given sequence number(inclusive) to a given sequence number(inclusive)
 func (s *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return nil, errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
-	// create the database select statement
 	statement := s.sb.
 		Select(columns...).
 		From(tableName).
@@ -318,31 +346,26 @@ func (s *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fr
 		OrderBy("sequence_number ASC").
 		Limit(limit)
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
-	// execute the query against the database
 	var rows rows
-	err = s.db.SelectAll(ctx, &rows, query, args...)
-	if err != nil {
+	if err := selectAll(ctx, pool, &rows, query, args...); err != nil {
 		return nil, fmt.Errorf("failed to fetch the events from the database: %w", err)
 	}
 
-	// return the derivative events
 	return rows.ToEvents()
 }
 
 // GetLatestEvent fetches the latest event
 func (s *EventsStore) GetLatestEvent(ctx context.Context, persistenceID string) (*egopb.Event, error) {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return nil, errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
-	// create the database select statement
 	statement := s.sb.
 		Select(columns...).
 		From(tableName).
@@ -350,36 +373,30 @@ func (s *EventsStore) GetLatestEvent(ctx context.Context, persistenceID string) 
 		OrderBy("sequence_number DESC").
 		Limit(1)
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
-	// execute the query against the database
 	row := new(row)
-	err = s.db.Select(ctx, row, query, args...)
-	if err != nil {
+	if err := selectOne(ctx, pool, row, query, args...); err != nil {
 		return nil, fmt.Errorf("failed to fetch the latest event from the database: %w", err)
 	}
 
-	// check whether we do have data
 	if row.PersistenceID == "" {
 		return nil, nil
 	}
 
-	// return the derivative event
 	return row.ToEvent()
 }
 
 // GetShardEvents returns the next (max) events after the offset in the journal for a given shard
 func (s *EventsStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return nil, 0, errors.New("journal store is not connected")
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, 0, err
 	}
 
-	// create the database select statement
 	statement := s.sb.
 		Select(columns...).
 		From(tableName).
@@ -388,59 +405,61 @@ func (s *EventsStore) GetShardEvents(ctx context.Context, shardNumber uint64, of
 		OrderBy("timestamp ASC").
 		Limit(limit)
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
-	// execute the query against the database
 	var rows rows
-	err = s.db.SelectAll(ctx, &rows, query, args...)
-	if err != nil {
+	if err := selectAll(ctx, pool, &rows, query, args...); err != nil {
 		return nil, 0, fmt.Errorf("failed to fetch the events from the database: %w", err)
 	}
 
-	// short-circuit the request
 	if len(rows) == 0 {
 		return nil, 0, nil
 	}
 
-	// grab the events
 	events, err := rows.ToEvents()
-	// handle the error when parsing
 	if err != nil {
 		return nil, 0, err
 	}
-	// get the next offset
+
 	nextOffset := events[len(events)-1].GetTimestamp()
-	// return the data
 	return events, nextOffset, nil
 }
 
-// ShardNumbers returns the distinct list of all the shards in the journal store
-func (s *EventsStore) ShardNumbers(ctx context.Context) ([]uint64, error) {
-	// check whether this instance of the journal is connected or not
-	if !s.connected.Load() {
-		return nil, errors.New("journal store is not connected")
+// ShardOffsets returns every distinct shard in the journal mapped to the
+// offset (timestamp) of its most recent event. An empty journal yields an empty map.
+func (s *EventsStore) ShardOffsets(ctx context.Context) (map[uint64]int64, error) {
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
-	// create the statement
 	statement := s.sb.
-		Select("DISTINCT shard_number").
-		From(tableName)
+		Select("shard_number", "MAX(timestamp) AS current_offset").
+		From(tableName).
+		GroupBy("shard_number")
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
-	var shardNumbers []uint64
-	err = s.db.SelectAll(ctx, &shardNumbers, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the events from the database: %w", err)
+	type row struct {
+		ShardNumber   uint64
+		CurrentOffset int64
 	}
 
-	return shardNumbers, nil
+	var rows []*row
+	if err := selectAll(ctx, pool, &rows, query, args...); err != nil {
+		return nil, fmt.Errorf("failed to fetch the shard offsets from the database: %w", err)
+	}
+
+	offsets := make(map[uint64]int64, len(rows))
+	for _, row := range rows {
+		offsets[row.ShardNumber] = row.CurrentOffset
+	}
+
+	return offsets, nil
 }

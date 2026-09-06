@@ -2,12 +2,12 @@
 
 ## Overview
 This package backs [eGo](https://github.com/Tochemey/ego) projection offsets with PostgreSQL. 
-It fulfils `github.com/tochemey/ego/v3/offsetstore.OffsetStore`, managing per-projection, per-shard offsets in a single table while handling the protobuf plumbing for you.
+It fulfils `github.com/tochemey/ego/v4/offsetstore.OffsetStore`, managing per-projection, per-shard offsets in a single table while handling the protobuf plumbing for you.
 
 ## Features
 - Implements the complete OffsetStore contract (`WriteOffset`, `GetCurrentOffset`, `ResetOffset`, `Ping`, lifecycle methods)
-- Transactional delete-and-insert semantics guarantee a single row per projection/shard pair
-- Uses `pgxpool` under the hood with safe default connection settings
+- `INSERT ... ON CONFLICT` upsert keyed on `(projection_name, shard_number)` guarantees a single row per projection/shard pair
+- Uses `pgxpool` under the hood with safe default connection settings, or bring your own pool through `NewOffsetStoreWithPool`
 - Schema-qualified deployments via `Config.DBSchema`
 
 ## Schema
@@ -41,7 +41,7 @@ import (
 	"time"
 
 	pgstore "github.com/tochemey/ego-contrib/offsetstore/postgres"
-	"github.com/tochemey/ego/v3/egopb"
+	"github.com/tochemey/ego/v4/egopb"
 )
 
 func main() {
@@ -88,13 +88,37 @@ func main() {
 }
 ```
 
+## Bringing your own connection pool
+`NewOffsetStore` builds and owns a `pgxpool.Pool` from `Config`: `Connect` opens it and `Disconnect` closes it.
+`Config` also carries the pool settings (`MaxConnections`, `MinConnections`, `MaxConnectionLifetime`, `MaxConnIdleTime`, `HealthCheckPeriod`) and `DBSSLMode`, with sensible defaults when left empty.
+
+When your application already manages a pool, or when several stores must share one, hand it over with `NewOffsetStoreWithPool`:
+
+```go
+pool, err := pgxpool.New(ctx, "postgres://ego:secret@127.0.0.1:5432/ego?search_path=public")
+if err != nil {
+	log.Fatalf("create pool: %v", err)
+}
+defer pool.Close()
+
+store := pgstore.NewOffsetStoreWithPool(pool)
+if err := store.Connect(ctx); err != nil { // only pings the pool
+	log.Fatalf("connect store: %v", err)
+}
+defer store.Disconnect(ctx) // never closes a pool it did not create
+```
+
+The store only depends on the `Pool` interface (`Exec`, `Query`, `Ping`), which `*pgxpool.Pool` satisfies as is.
+Any type with those methods works too, for instance a pool wrapped for tracing or `pgxmock.PgxPoolIface` in unit tests.
+Ownership stays with the caller: `Disconnect` never closes a pool it did not create, so a single pool can back the event, snapshot, durable state and offset stores at once.
+
 ## Testing
 - Run all module tests: `go test ./...`
-- Use `offsetstore/postgres/internal/testkit.go` to spin up PostgreSQL via Testcontainers-Go when writing integration suites
-- Earthly users can execute the repository target: `earthly +test`
+- Docker-based harness: `offsetstore/postgres/helper_test.go` spins up PostgreSQL through Testcontainers-Go
+- Repository-wide recipe: run `make test` from the repository root, or `make test/offsetstore/postgres` for this module only
 
 ## Operational Notes
-- `WriteOffset` removes any existing row for the projection/shard before inserting the new offset to keep the table tidy
-- `ResetOffset` updates every shard for the provided projection in a single transaction
-- Connection pool defaults live in `internal/config.go`; fork or wrap the store if you need to tune them
+- `WriteOffset` upserts the row of the projection/shard pair, so the table never holds more than one row per pair
+- `ResetOffset` updates every shard of the provided projection in a single statement
+- Pool settings (sizes, lifetimes, health checks) and the SSL mode are fields of `Config`; leave them empty for the defaults, or bring your own pool
 - Remember to import the protobuf packages that describe your offsets (eGo registers them automatically, but custom messages must also be in scope)

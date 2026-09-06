@@ -26,16 +26,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-	"go.uber.org/atomic"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/tochemey/ego/v4/egopb"
 	"github.com/tochemey/ego/v4/offsetstore"
-
-	postgres "github.com/tochemey/ego-contrib/offsetstore/postgres/internal"
 )
 
 var (
@@ -47,6 +46,9 @@ var (
 	}
 
 	tableName = "offsets_store"
+
+	// errNotConnected is returned when an operation runs against a store that is not connected
+	errNotConnected = errors.New("offset store is not connected")
 )
 
 // offsetRow represent the offset entry in the offset store
@@ -61,80 +63,133 @@ type offsetRow struct {
 	Timestamp int64
 }
 
-// OffsetStore implements the OffsetStore interface
+// OffsetStore implements the offsetstore.OffsetStore interface
 // and helps persist offsets in a postgres database
 type OffsetStore struct {
-	db postgres.Postgres
-	sb sq.StatementBuilderType
-	// hold the connection state to avoid multiple connection of the same instance
-	connected *atomic.Bool
+	// config holds the settings used to build the pool.
+	// It is only set when the store owns its pool.
+	config *Config
+	// pool runs the queries. It is either built from config in Connect
+	// or supplied by the caller through NewOffsetStoreWithPool.
+	pool Pool
+	// owned is the pool built by the store from config.
+	// It is nil when the pool was supplied by the caller, in which case the store never closes it.
+	owned *pgxpool.Pool
+	sb    sq.StatementBuilderType
+	// guards connection state transitions
+	mu        sync.Mutex
+	connected bool
 }
 
 // ensure the complete implementation of the OffsetStore interface
 var _ offsetstore.OffsetStore = (*OffsetStore)(nil)
 
-// NewOffsetStore creates an instance of OffsetStore
+// NewOffsetStore creates an offset store that builds and owns its own connection pool.
+// The pool is opened by Connect and closed by Disconnect.
 func NewOffsetStore(config *Config) *OffsetStore {
-	// create the underlying db connection
-	dbConfig := postgres.NewConfig(config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName)
-	dbConfig.DBSchema = config.DBSchema
-	db := postgres.New(dbConfig)
 	return &OffsetStore{
-		db:        db,
-		sb:        sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
-		connected: atomic.NewBool(false),
+		config: config.sanitize(),
+		sb:     sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
 	}
 }
 
-// Connect connects to the underlying postgres database
-func (x *OffsetStore) Connect(ctx context.Context) error {
-	// check whether this instance of the journal is connected or not
-	if x.connected.Load() {
+// NewOffsetStoreWithPool creates an offset store backed by a pool supplied by the caller.
+// The caller keeps ownership of the pool: Connect only verifies it is reachable and
+// Disconnect never closes it, so the same pool can be shared with other stores
+// and with the rest of the application.
+func NewOffsetStoreWithPool(pool Pool) *OffsetStore {
+	return &OffsetStore{
+		pool: pool,
+		sb:   sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+	}
+}
+
+// Connect connects to the underlying postgres database.
+// When the store owns its pool, the pool is created here. When the pool was supplied
+// by the caller, Connect only verifies the database is reachable.
+func (s *OffsetStore) Connect(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.connected {
 		return nil
 	}
 
-	// connect to the underlying db
-	if err := x.db.Connect(ctx); err != nil {
-		return err
+	if s.config != nil {
+		pool, err := newPool(ctx, s.config)
+		if err != nil {
+			return err
+		}
+		s.owned = pool
+		s.pool = pool
+		s.connected = true
+		return nil
 	}
 
-	// set the connection status
-	x.connected.Store(true)
+	if s.pool == nil {
+		return errors.New("offset store pool is not defined")
+	}
 
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("failed to ping the database connection: %w", err)
+	}
+
+	s.connected = true
 	return nil
 }
 
-// Disconnect disconnects from the underlying postgres database
-func (x *OffsetStore) Disconnect(ctx context.Context) error {
-	// check whether this instance of the journal is connected or not
-	if !x.connected.Load() {
+// Disconnect disconnects from the underlying postgres database.
+// The pool is only closed when it was built by the store.
+func (s *OffsetStore) Disconnect(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
 		return nil
 	}
 
-	// disconnect the underlying database
-	if err := x.db.Disconnect(ctx); err != nil {
-		return err
+	if s.owned != nil {
+		s.owned.Close()
+		s.owned = nil
+		s.pool = nil
 	}
-	// set the connection status
-	x.connected.Store(false)
 
+	s.connected = false
 	return nil
+}
+
+// Ping verifies a connection to the database is still alive, establishing a connection if necessary.
+func (s *OffsetStore) Ping(ctx context.Context) error {
+	pool, err := s.activePool()
+	if err != nil {
+		return s.Connect(ctx)
+	}
+	return pool.Ping(ctx)
+}
+
+// activePool returns the pool to run queries against, or an error when the store is not connected
+func (s *OffsetStore) activePool() (Pool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.connected {
+		return nil, errNotConnected
+	}
+	return s.pool, nil
 }
 
 // WriteOffset writes an offset into the offset store
-func (x *OffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) error {
-	// check whether this instance of the offset store is connected or not
-	if !x.connected.Load() {
-		return errors.New("offset store is not connected")
+func (s *OffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) error {
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
-	// make sure the record is defined
 	if offset == nil || proto.Equal(offset, new(egopb.Offset)) {
 		return errors.New("offset record is not defined")
 	}
 
-	// create the upsert statement
-	upsertBuilder := x.sb.
+	statement := s.sb.
 		Insert(tableName).
 		Columns(columns...).
 		Values(
@@ -145,15 +200,12 @@ func (x *OffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) err
 		Suffix("ON CONFLICT (projection_name, shard_number) " +
 			"DO UPDATE SET current_offset = EXCLUDED.current_offset, timestamp = EXCLUDED.timestamp")
 
-	// get the SQL statement to run
-	query, args, err := upsertBuilder.ToSql()
+	query, args, err := statement.ToSql()
 	if err != nil {
 		return fmt.Errorf("unable to build sql upsert statement: %w", err)
 	}
 
-	// execute the upsert
-	_, err = x.db.Exec(ctx, query, args...)
-	if err != nil {
+	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to write offset: %w", err)
 	}
 
@@ -161,28 +213,25 @@ func (x *OffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) err
 }
 
 // GetCurrentOffset returns the current offset of a given projection id
-func (x *OffsetStore) GetCurrentOffset(ctx context.Context, projectionID *egopb.ProjectionId) (currentOffset *egopb.Offset, err error) {
-	// check whether this instance of the offset store is connected or not
-	if !x.connected.Load() {
-		return nil, errors.New("offset store is not connected")
+func (s *OffsetStore) GetCurrentOffset(ctx context.Context, projectionID *egopb.ProjectionId) (currentOffset *egopb.Offset, err error) {
+	pool, err := s.activePool()
+	if err != nil {
+		return nil, err
 	}
 
-	// create the SQL statement
-	statement := x.sb.
+	statement := s.sb.
 		Select(columns...).
 		From(tableName).
 		Where(sq.Eq{"projection_name": projectionID.GetProjectionName()}).
 		Where(sq.Eq{"shard_number": projectionID.GetShardNumber()})
 
-	// get the sql statement and the arguments
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build the select sql statement: %w", err)
 	}
 
 	row := new(offsetRow)
-	err = x.db.Select(ctx, row, query, args...)
-	if err != nil {
+	if err := selectOne(ctx, pool, row, query, args...); err != nil {
 		return nil, fmt.Errorf("failed to fetch the current offset from the database: %w", err)
 	}
 
@@ -200,43 +249,28 @@ func (x *OffsetStore) GetCurrentOffset(ctx context.Context, projectionID *egopb.
 }
 
 // ResetOffset resets the offset of given projection to a given value across all shards
-func (x *OffsetStore) ResetOffset(ctx context.Context, projectionName string, value int64) error {
-	// check whether this instance of the offset store is connected or not
-	if !x.connected.Load() {
-		return errors.New("offset store is not connected")
+func (s *OffsetStore) ResetOffset(ctx context.Context, projectionName string, value int64) error {
+	pool, err := s.activePool()
+	if err != nil {
+		return err
 	}
 
-	// define the current timestamp
 	timestamp := time.Now().UnixMilli()
 
-	// create the sql statement
-	statement := x.sb.
+	statement := s.sb.
 		Update(tableName).
 		Set("current_offset", value).
 		Set("timestamp", timestamp).
 		Where(sq.Eq{"projection_name": projectionName})
 
-	// get the SQL statement to run
 	query, args, err := statement.ToSql()
 	if err != nil {
 		return fmt.Errorf("unable to build sql update statement: %w", err)
 	}
 
-	// execute the update
-	_, err = x.db.Exec(ctx, query, args...)
-	if err != nil {
+	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to reset offset: %w", err)
 	}
 
 	return nil
-}
-
-// Ping verifies a connection to the database is still alive, establishing a connection if necessary.
-func (x *OffsetStore) Ping(ctx context.Context) error {
-	// check whether we are connected or not
-	if !x.connected.Load() {
-		return x.Connect(ctx)
-	}
-
-	return x.db.Ping(ctx)
 }

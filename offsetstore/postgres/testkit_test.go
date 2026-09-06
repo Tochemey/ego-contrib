@@ -29,19 +29,9 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+// testkitSuite exercises the test helpers against the shared test container
 type testkitSuite struct {
 	suite.Suite
-	container *TestContainer
-}
-
-// SetupSuite starts the Postgres database engine and set the container
-// host and port to use in the tests
-func (s *testkitSuite) SetupSuite() {
-	s.container = NewTestContainer("testdb", "test", "test")
-}
-
-func (s *testkitSuite) TearDownSuite() {
-	s.container.Cleanup()
 }
 
 // In order for 'go test' to run this suite, we need to create
@@ -53,7 +43,7 @@ func TestTestKitSuite(t *testing.T) {
 func (s *testkitSuite) TestDropTable() {
 	s.Run("with no table defined", func() {
 		ctx := context.TODO()
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -71,7 +61,7 @@ func (s *testkitSuite) TestDropTable() {
 func (s *testkitSuite) TestTableExist() {
 	s.Run("with no table defined", func() {
 		ctx := context.TODO()
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -90,7 +80,7 @@ func (s *testkitSuite) TestCreateAndCheckExistence() {
 		ctx := context.TODO()
 		const schemaName = "example"
 
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -112,7 +102,7 @@ func (s *testkitSuite) TestCreateAndCheckExistence() {
 		ctx := context.TODO()
 		const schemaName = "example"
 
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -130,7 +120,7 @@ func (s *testkitSuite) TestCreateTable() {
 		ctx := context.TODO()
 		const stmt = `create table mangoes(id serial, taste varchar(10));`
 
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -153,7 +143,7 @@ func (s *testkitSuite) TestCreateTable() {
 		const schemaName = "example"
 		const stmt = `create table example.mangoes(id serial, taste varchar(10));`
 
-		db := s.container.GetTestDB()
+		db := testContainer.GetTestDB()
 
 		err := db.Connect(ctx)
 		s.Assert().NoError(err)
@@ -182,7 +172,7 @@ func (s *testkitSuite) TestCount() {
 	const schemaName = "example"
 	const stmt = `create table example.mangoes(id serial, taste varchar(10));`
 
-	db := s.container.GetTestDB()
+	db := testContainer.GetTestDB()
 
 	err := db.Connect(ctx)
 	s.Assert().NoError(err)

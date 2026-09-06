@@ -38,30 +38,31 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// newTestSnapshot creates a snapshot for tests
-func newTestSnapshot(t *testing.T, persistenceID string, sequenceNumber uint64, value string) *egopb.Snapshot {
+// newTestState creates a durable state for tests
+func newTestState(t *testing.T, persistenceID string, version uint64, value string) *egopb.DurableState {
 	t.Helper()
 	state, err := anypb.New(wrapperspb.String(value))
 	require.NoError(t, err)
-	return &egopb.Snapshot{
+	return &egopb.DurableState{
 		PersistenceId:  persistenceID,
-		SequenceNumber: sequenceNumber,
-		State:          state,
+		VersionNumber:  version,
+		ResultingState: state,
 		Timestamp:      time.Now().UnixMilli(),
+		Shard:          1,
 	}
 }
 
-func TestPostgresSnapshotStore(t *testing.T) {
-	t.Run("testNewSnapshotStore", func(t *testing.T) {
-		store := NewSnapshotStore(testConfig())
+func TestPostgresDurableStore(t *testing.T) {
+	t.Run("testNewDurableStore", func(t *testing.T) {
+		store := NewDurableStore(testConfig())
 		assert.NotNil(t, store)
 		var p interface{} = store
-		_, ok := p.(persistence.SnapshotStore)
+		_, ok := p.(persistence.StateStore)
 		assert.True(t, ok)
 	})
 	t.Run("testConnect:happy path", func(t *testing.T) {
 		ctx := context.TODO()
-		store := NewSnapshotStore(testConfig())
+		store := NewDurableStore(testConfig())
 		assert.NotNil(t, store)
 		err := store.Connect(ctx)
 		assert.NoError(t, err)
@@ -73,14 +74,14 @@ func TestPostgresSnapshotStore(t *testing.T) {
 		config := testConfig()
 		config.DBName = "nonexistent"
 
-		store := NewSnapshotStore(config)
+		store := NewDurableStore(config)
 		assert.NotNil(t, store)
 		err := store.Connect(ctx)
 		assert.Error(t, err)
 	})
 	t.Run("testConnect:owned pool is rebuilt after Disconnect", func(t *testing.T) {
 		ctx := context.TODO()
-		store := NewSnapshotStore(testConfig())
+		store := NewDurableStore(testConfig())
 		require.NoError(t, store.Connect(ctx))
 		require.NoError(t, store.Disconnect(ctx))
 
@@ -100,26 +101,26 @@ func TestPostgresSnapshotStore(t *testing.T) {
 		schemaUtil := NewSchemaUtils(db)
 		require.NoError(t, schemaUtil.CreateTable(ctx))
 
-		store := NewSnapshotStoreWithPool(pool)
+		store := NewDurableStoreWithPool(pool)
 		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteSnapshot(ctx, newTestSnapshot(t, "entity-1", 1, "state-v1")))
+		require.NoError(t, store.WriteState(ctx, newTestState(t, "entity-1", 1, "state-v1")))
 
 		// disconnecting the store must leave the caller's pool open
 		require.NoError(t, store.Disconnect(ctx))
 		require.NoError(t, pool.Ping(ctx))
 
 		// a second store on the same pool keeps working
-		other := NewSnapshotStoreWithPool(pool)
+		other := NewDurableStoreWithPool(pool)
 		require.NoError(t, other.Connect(ctx))
-		latest, err := other.GetLatestSnapshot(ctx, "entity-1")
+		latest, err := other.GetLatestState(ctx, "entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, latest)
-		assert.EqualValues(t, 1, latest.GetSequenceNumber())
+		assert.EqualValues(t, 1, latest.GetVersionNumber())
 		require.NoError(t, other.Disconnect(ctx))
 
 		require.NoError(t, schemaUtil.DropTable(ctx))
 	})
-	t.Run("testWriteAndGetLatestSnapshot", func(t *testing.T) {
+	t.Run("testWriteAndGetLatestState", func(t *testing.T) {
 		ctx := context.TODO()
 
 		db, err := dbHandle(ctx)
@@ -127,146 +128,54 @@ func TestPostgresSnapshotStore(t *testing.T) {
 		schemaUtil := NewSchemaUtils(db)
 		require.NoError(t, schemaUtil.CreateTable(ctx))
 
-		store := NewSnapshotStore(testConfig())
-		require.NoError(t, store.Connect(ctx))
-
-		persistenceID := "entity-1"
-		state, err := anypb.New(wrapperspb.String("test-state"))
-		require.NoError(t, err)
-		ts := time.Now().UnixMilli()
-
-		// write snapshot at sequence 5
-		snapshot1 := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 5,
-			State:          state,
-			Timestamp:      ts,
-		}
-		assert.NoError(t, store.WriteSnapshot(ctx, snapshot1))
-
-		// write snapshot at sequence 10
-		snapshot2 := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 10,
-			State:          state,
-			Timestamp:      ts,
-		}
-		assert.NoError(t, store.WriteSnapshot(ctx, snapshot2))
-
-		// get the latest snapshot - should be sequence 10
-		latest, err := store.GetLatestSnapshot(ctx, persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.Equal(t, uint64(10), latest.GetSequenceNumber())
-		assert.Equal(t, persistenceID, latest.GetPersistenceId())
-		assert.True(t, proto.Equal(state, latest.GetState()))
-
-		// get snapshot for non-existent entity - should return nil
-		notFound, err := store.GetLatestSnapshot(ctx, "non-existent")
-		require.NoError(t, err)
-		assert.Nil(t, notFound)
-
-		require.NoError(t, schemaUtil.DropTable(ctx))
-		require.NoError(t, store.Disconnect(ctx))
-	})
-	t.Run("testDeleteSnapshots", func(t *testing.T) {
-		ctx := context.TODO()
-
-		db, err := dbHandle(ctx)
-		require.NoError(t, err)
-		schemaUtil := NewSchemaUtils(db)
-		require.NoError(t, schemaUtil.CreateTable(ctx))
-
-		store := NewSnapshotStore(testConfig())
+		store := NewDurableStore(testConfig())
 		require.NoError(t, store.Connect(ctx))
 
 		persistenceID := "entity-2"
 
-		// write snapshots at sequences 5, 10, 15, 20
-		for _, seq := range []uint64{5, 10, 15, 20} {
-			require.NoError(t, store.WriteSnapshot(ctx, newTestSnapshot(t, persistenceID, seq, "test-state")))
-		}
+		// no state yet
+		missing, err := store.GetLatestState(ctx, persistenceID)
+		require.NoError(t, err)
+		assert.Nil(t, missing)
 
-		// delete snapshots up to sequence 10 (inclusive)
-		require.NoError(t, store.DeleteSnapshots(ctx, persistenceID, 10))
+		// write the first version
+		first := newTestState(t, persistenceID, 1, "state-v1")
+		require.NoError(t, store.WriteState(ctx, first))
 
-		// the latest snapshot should be at sequence 20
-		latest, err := store.GetLatestSnapshot(ctx, persistenceID)
+		latest, err := store.GetLatestState(ctx, persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
-		assert.Equal(t, uint64(20), latest.GetSequenceNumber())
+		assert.True(t, proto.Equal(first, latest))
 
-		// verify count - should have 2 remaining (15, 20)
-		count, err := db.Count(ctx, tableName)
-		require.NoError(t, err)
-		assert.Equal(t, 2, count)
+		// writing a new version upserts the single row
+		second := newTestState(t, persistenceID, 2, "state-v2")
+		require.NoError(t, store.WriteState(ctx, second))
 
-		require.NoError(t, schemaUtil.DropTable(ctx))
-		require.NoError(t, store.Disconnect(ctx))
-	})
-	t.Run("testWriteSnapshotUpsert", func(t *testing.T) {
-		ctx := context.TODO()
-
-		db, err := dbHandle(ctx)
-		require.NoError(t, err)
-		schemaUtil := NewSchemaUtils(db)
-		require.NoError(t, schemaUtil.CreateTable(ctx))
-
-		store := NewSnapshotStore(testConfig())
-		require.NoError(t, store.Connect(ctx))
-
-		persistenceID := "entity-3"
-		ts := time.Now().UnixMilli()
-
-		// write snapshot at sequence 5
-		state1, err := anypb.New(wrapperspb.String("state-v1"))
-		require.NoError(t, err)
-		snapshot1 := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 5,
-			State:          state1,
-			Timestamp:      ts,
-		}
-		assert.NoError(t, store.WriteSnapshot(ctx, snapshot1))
-
-		// overwrite snapshot at same sequence 5 with new state
-		state2, err := anypb.New(wrapperspb.String("state-v2"))
-		require.NoError(t, err)
-		snapshot2 := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 5,
-			State:          state2,
-			Timestamp:      ts + 1000,
-		}
-		assert.NoError(t, store.WriteSnapshot(ctx, snapshot2))
-
-		// should only have 1 row, with updated state
 		count, err := db.Count(ctx, tableName)
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 
-		latest, err := store.GetLatestSnapshot(ctx, persistenceID)
+		latest, err = store.GetLatestState(ctx, persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
-		assert.True(t, proto.Equal(state2, latest.GetState()))
-		assert.Equal(t, ts+1000, latest.GetTimestamp())
+		assert.True(t, proto.Equal(second, latest))
 
 		require.NoError(t, schemaUtil.DropTable(ctx))
 		require.NoError(t, store.Disconnect(ctx))
 	})
 }
 
-// newMockStore creates a snapshot store backed by a pgxmock pool
-func newMockStore(t *testing.T) (*SnapshotStore, pgxmock.PgxPoolIface) {
+// newMockStore creates a durable store backed by a pgxmock pool
+func newMockStore(t *testing.T) (*DurableStore, pgxmock.PgxPoolIface) {
 	t.Helper()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	t.Cleanup(mock.Close)
-	return NewSnapshotStoreWithPool(mock), mock
+	return NewDurableStoreWithPool(mock), mock
 }
 
-// newConnectedMockStore creates a snapshot store backed by a pgxmock pool and connects it
-func newConnectedMockStore(t *testing.T) (*SnapshotStore, pgxmock.PgxPoolIface) {
+// newConnectedMockStore creates a durable store backed by a pgxmock pool and connects it
+func newConnectedMockStore(t *testing.T) (*DurableStore, pgxmock.PgxPoolIface) {
 	t.Helper()
 	store, mock := newMockStore(t)
 	mock.ExpectPing()
@@ -274,30 +183,24 @@ func newConnectedMockStore(t *testing.T) (*SnapshotStore, pgxmock.PgxPoolIface) 
 	return store, mock
 }
 
-func TestSnapshotStoreNotConnected(t *testing.T) {
+func TestDurableStoreNotConnected(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newMockStore(t)
 
-	t.Run("WriteSnapshot", func(t *testing.T) {
-		err := store.WriteSnapshot(ctx, newTestSnapshot(t, "p1", 1, "state"))
+	t.Run("WriteState", func(t *testing.T) {
+		err := store.WriteState(ctx, newTestState(t, "p1", 1, "state"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not connected")
 	})
 
-	t.Run("GetLatestSnapshot", func(t *testing.T) {
-		_, err := store.GetLatestSnapshot(ctx, "p1")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not connected")
-	})
-
-	t.Run("DeleteSnapshots", func(t *testing.T) {
-		err := store.DeleteSnapshots(ctx, "p1", 10)
+	t.Run("GetLatestState", func(t *testing.T) {
+		_, err := store.GetLatestState(ctx, "p1")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not connected")
 	})
 }
 
-func TestSnapshotStoreConnectionLifecycle(t *testing.T) {
+func TestDurableStoreConnectionLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Connect pings the provided pool", func(t *testing.T) {
@@ -326,7 +229,7 @@ func TestSnapshotStoreConnectionLifecycle(t *testing.T) {
 	})
 
 	t.Run("Connect without pool fails", func(t *testing.T) {
-		store := NewSnapshotStoreWithPool(nil)
+		store := NewDurableStoreWithPool(nil)
 		err := store.Connect(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "pool is not defined")
@@ -383,121 +286,92 @@ func TestSnapshotStoreConnectionLifecycle(t *testing.T) {
 	})
 }
 
-func TestWriteSnapshotUnit(t *testing.T) {
+func TestWriteStateUnit(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("nil snapshot is no-op", func(t *testing.T) {
+	t.Run("nil state is no-op", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		assert.NoError(t, store.WriteSnapshot(ctx, nil))
+		assert.NoError(t, store.WriteState(ctx, nil))
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("empty snapshot is no-op", func(t *testing.T) {
+	t.Run("empty state is no-op", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		assert.NoError(t, store.WriteSnapshot(ctx, &egopb.Snapshot{}))
+		assert.NoError(t, store.WriteState(ctx, &egopb.DurableState{}))
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("Exec error", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		mock.ExpectExec("INSERT INTO snapshots_store").
-			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		mock.ExpectExec("INSERT INTO states_store").
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 			WillReturnError(errors.New("exec failed"))
 
-		err := store.WriteSnapshot(ctx, newTestSnapshot(t, "p1", 1, "state"))
+		err := store.WriteState(ctx, newTestState(t, "p1", 1, "state"))
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to write snapshot")
+		assert.Contains(t, err.Error(), "failed to record durable state")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("snapshot is upserted", func(t *testing.T) {
+	t.Run("state is upserted", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		snapshot := newTestSnapshot(t, "p1", 3, "state")
-		mock.ExpectExec("INSERT INTO snapshots_store").
-			WithArgs("p1", uint64(3), pgxmock.AnyArg(), "google.protobuf.Any", snapshot.GetTimestamp(), "", false).
+		state := newTestState(t, "p1", 3, "state")
+		mock.ExpectExec("INSERT INTO states_store").
+			WithArgs("p1", uint64(3), pgxmock.AnyArg(), "google.protobuf.Any", state.GetTimestamp(), uint64(1)).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-		require.NoError(t, store.WriteSnapshot(ctx, snapshot))
+		require.NoError(t, store.WriteState(ctx, state))
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
-func TestGetLatestSnapshotUnit(t *testing.T) {
+func TestGetLatestStateUnit(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Query error", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		mock.ExpectQuery("FROM snapshots_store WHERE persistence_id").
+		mock.ExpectQuery("FROM states_store WHERE persistence_id").
 			WithArgs("p1").
 			WillReturnError(errors.New("select failed"))
 
-		_, err := store.GetLatestSnapshot(ctx, "p1")
+		_, err := store.GetLatestState(ctx, "p1")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to fetch the latest snapshot from the database")
+		assert.Contains(t, err.Error(), "failed to fetch the latest durable state from the database")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("empty result returns nil", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		mock.ExpectQuery("FROM snapshots_store WHERE persistence_id").
+		mock.ExpectQuery("FROM states_store WHERE persistence_id").
 			WithArgs("p1").
 			WillReturnRows(pgxmock.NewRows(columns))
 
-		snapshot, err := store.GetLatestSnapshot(ctx, "p1")
+		state, err := store.GetLatestState(ctx, "p1")
 		assert.NoError(t, err)
-		assert.Nil(t, snapshot)
+		assert.Nil(t, state)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("row is scanned into a snapshot", func(t *testing.T) {
+	t.Run("row is scanned into a durable state", func(t *testing.T) {
 		store, mock := newConnectedMockStore(t)
-		expected := newTestSnapshot(t, "p1", 5, "state")
-		expected.EncryptionKeyId = "key-1"
-		expected.IsEncrypted = true
-		payload, err := proto.Marshal(expected.GetState())
+		expected := newTestState(t, "p1", 5, "state")
+		payload, err := proto.Marshal(expected.GetResultingState())
 		require.NoError(t, err)
 
-		mock.ExpectQuery("FROM snapshots_store WHERE persistence_id").
+		mock.ExpectQuery("FROM states_store WHERE persistence_id").
 			WithArgs("p1").
 			WillReturnRows(pgxmock.NewRows(columns).AddRow(
 				expected.GetPersistenceId(),
-				expected.GetSequenceNumber(),
+				expected.GetVersionNumber(),
 				payload,
 				"google.protobuf.Any",
 				expected.GetTimestamp(),
-				expected.GetEncryptionKeyId(),
-				expected.GetIsEncrypted(),
+				expected.GetShard(),
 			))
 
-		snapshot, err := store.GetLatestSnapshot(ctx, "p1")
+		state, err := store.GetLatestState(ctx, "p1")
 		require.NoError(t, err)
-		assert.True(t, proto.Equal(expected, snapshot))
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-}
-
-func TestDeleteSnapshotsUnit(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("Exec error", func(t *testing.T) {
-		store, mock := newConnectedMockStore(t)
-		mock.ExpectExec("DELETE FROM snapshots_store").
-			WithArgs("p1", uint64(10)).
-			WillReturnError(errors.New("exec failed"))
-
-		err := store.DeleteSnapshots(ctx, "p1", 10)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to delete snapshots")
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("snapshots are deleted", func(t *testing.T) {
-		store, mock := newConnectedMockStore(t)
-		mock.ExpectExec("DELETE FROM snapshots_store").
-			WithArgs("p1", uint64(10)).
-			WillReturnResult(pgxmock.NewResult("DELETE", 2))
-
-		require.NoError(t, store.DeleteSnapshots(ctx, "p1", 10))
+		assert.True(t, proto.Equal(expected, state))
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }

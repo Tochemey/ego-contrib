@@ -6,7 +6,7 @@ It uses `github.com/jackc/pgx/v5` with a connection pool and persists snapshots 
 
 ## Features
 - Implements `github.com/tochemey/ego/v4/persistence.SnapshotStore`
-- Connection pooling via `pgxpool` with sensible defaults (4 max connections)
+- Connection pooling via `pgxpool` with sensible defaults (4 max connections), or bring your own pool through `NewSnapshotStoreWithPool`
 - Idempotent `INSERT ... ON CONFLICT` upsert keyed on `(persistence_id, sequence_number)`
 - SQL builder based on `github.com/Masterminds/squirrel`
 
@@ -109,12 +109,36 @@ func main() {
 
 > **Reminder:** The store relies on `protoregistry.GlobalTypes`. Import the protobuf packages that define your state messages so their descriptors are registered before you read from the database.
 
+## Bringing your own connection pool
+`NewSnapshotStore` builds and owns a `pgxpool.Pool` from `Config`: `Connect` opens it and `Disconnect` closes it.
+`Config` also carries the pool settings (`MaxConnections`, `MinConnections`, `MaxConnectionLifetime`, `MaxConnIdleTime`, `HealthCheckPeriod`) and `DBSSLMode`, with sensible defaults when left empty.
+
+When your application already manages a pool, or when several stores must share one, hand it over with `NewSnapshotStoreWithPool`:
+
+```go
+pool, err := pgxpool.New(ctx, "postgres://ego:secret@127.0.0.1:5432/ego?search_path=public")
+if err != nil {
+	log.Fatalf("create pool: %v", err)
+}
+defer pool.Close()
+
+store := snapstore.NewSnapshotStoreWithPool(pool)
+if err := store.Connect(ctx); err != nil { // only pings the pool
+	log.Fatalf("connect store: %v", err)
+}
+defer store.Disconnect(ctx) // never closes a pool it did not create
+```
+
+The store only depends on the `Pool` interface (`Exec`, `Query`, `Ping`), which `*pgxpool.Pool` satisfies as is.
+Any type with those methods works too, for instance a pool wrapped for tracing or `pgxmock.PgxPoolIface` in unit tests.
+Ownership stays with the caller: `Disconnect` never closes a pool it did not create, so a single pool can back the event, snapshot, durable state and offset stores at once.
+
 ## Testing
 - Unit and integration suites: `go test ./...`
 - Docker-based harness: `snapshotstore/postgres/helper_test.go` spins up PostgreSQL through Testcontainers-Go
-- CI-friendly recipe: run `earthly +test` from the repository root if you already use Earthly locally
+- Repository-wide recipe: run `make test` from the repository root, or `make test/snapshotstore/postgres` for this module only
 
 ## Operational Notes
-- Connection settings (pool sizes, timeouts) default to conservative values inside `db_config.go`; fork or wrap the store if you need to tune them
+- Pool settings (sizes, lifetimes, health checks) and the SSL mode are fields of `Config`; leave them empty for the defaults, or bring your own pool
 - `Ping` automatically opens the connection if it has not been established
 - Errors from `WriteSnapshot` include context on failed inserts; bubble them up to your supervisor logic for proper retry handling

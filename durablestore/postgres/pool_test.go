@@ -28,8 +28,66 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
+
+func TestConnectionString(t *testing.T) {
+	t.Run("with password and schema", func(t *testing.T) {
+		config := &Config{
+			DBHost:     "localhost",
+			DBPort:     5432,
+			DBName:     "ego",
+			DBUser:     "ego",
+			DBPassword: "secret",
+			DBSchema:   "app",
+			DBSSLMode:  "require",
+		}
+		connStr := connectionString(config)
+		assert.Equal(t, "host=localhost port=5432 user=ego dbname=ego sslmode=require password=secret search_path=app", connStr)
+	})
+	t.Run("without password nor schema", func(t *testing.T) {
+		config := &Config{
+			DBHost:    "localhost",
+			DBPort:    5432,
+			DBName:    "ego",
+			DBUser:    "ego",
+			DBSSLMode: "disable",
+		}
+		connStr := connectionString(config)
+		assert.Equal(t, "host=localhost port=5432 user=ego dbname=ego sslmode=disable", connStr)
+	})
+}
+
+func TestConfigSanitize(t *testing.T) {
+	t.Run("defaults are applied without touching the original", func(t *testing.T) {
+		original := &Config{DBHost: "localhost"}
+		sanitized := original.sanitize()
+
+		assert.Equal(t, "disable", sanitized.DBSSLMode)
+		assert.Equal(t, 4, sanitized.MaxConnections)
+		assert.Equal(t, 0, sanitized.MinConnections)
+		assert.Equal(t, time.Hour, sanitized.MaxConnectionLifetime)
+		assert.Equal(t, 30*time.Minute, sanitized.MaxConnIdleTime)
+		assert.Equal(t, time.Minute, sanitized.HealthCheckPeriod)
+
+		assert.Empty(t, original.DBSSLMode)
+		assert.Zero(t, original.MaxConnections)
+		assert.Zero(t, original.HealthCheckPeriod)
+	})
+	t.Run("explicit values are preserved", func(t *testing.T) {
+		original := &Config{
+			DBSSLMode:             "verify-full",
+			MaxConnections:        10,
+			MinConnections:        2,
+			MaxConnectionLifetime: 2 * time.Hour,
+			MaxConnIdleTime:       time.Hour,
+			HealthCheckPeriod:     5 * time.Minute,
+		}
+		sanitized := original.sanitize()
+		assert.Equal(t, original, sanitized)
+	})
+}
 
 // account is a test struct
 type account struct {
@@ -37,123 +95,68 @@ type account struct {
 	AccountName string
 }
 
-// PostgresTestSuite will run the Postgres tests
-type PostgresTestSuite struct {
+// PoolTestSuite will run the pool tests against the test container
+type PoolTestSuite struct {
 	suite.Suite
-	container *TestContainer
-}
-
-// SetupSuite starts the Postgres database engine and set the container
-// host and port to use in the tests
-func (s *PostgresTestSuite) SetupSuite() {
-	s.container = NewTestContainer("testdb", "test", "test")
-}
-
-func (s *PostgresTestSuite) TearDownSuite() {
-	s.container.Cleanup()
 }
 
 // In order for 'go test' to run this suite, we need to create
 // a normal test function and pass our suite to suite.Run
-func TestPostgresTestSuite(t *testing.T) {
-	suite.Run(t, new(PostgresTestSuite))
+func TestPoolTestSuite(t *testing.T) {
+	suite.Run(t, new(PoolTestSuite))
 }
 
-func (s *PostgresTestSuite) TestConnect() {
-	s.Run("with valid connection settings", func() {
-		ctx := context.TODO()
-		db := s.container.GetTestDB()
+func (s *PoolTestSuite) TestNewPool() {
+	ctx := context.TODO()
 
-		err := db.Connect(ctx)
-		s.Assert().NoError(err)
+	s.Run("with valid connection settings", func() {
+		pool, err := newPool(ctx, testConfig().sanitize())
+		s.Require().NoError(err)
+		s.Require().NotNil(pool)
+		pool.Close()
 	})
 
 	s.Run("with invalid database port", func() {
-		ctx := context.TODO()
-		db := New(&Config{
-			DBUser:                "test",
-			DBName:                "testdb",
-			DBPassword:            "test",
-			DBSchema:              s.container.Schema(),
-			DBHost:                s.container.Host(),
-			DBPort:                -2,
-			MaxConnections:        4,
-			MinConnections:        0,
-			MaxConnectionLifetime: time.Hour,
-			MaxConnIdleTime:       30 * time.Minute,
-			HealthCheckPeriod:     time.Minute,
-		})
-		err := db.Connect(ctx)
+		config := testConfig()
+		config.DBPort = -2
+		pool, err := newPool(ctx, config.sanitize())
 		s.Assert().Error(err)
+		s.Assert().Nil(pool)
 	})
 
 	s.Run("with invalid database name", func() {
-		ctx := context.TODO()
-		db := New(&Config{
-			DBUser:                "test",
-			DBName:                "wrong-name",
-			DBPassword:            "test",
-			DBSchema:              s.container.Schema(),
-			DBHost:                s.container.Host(),
-			DBPort:                s.container.Port(),
-			MaxConnections:        4,
-			MinConnections:        0,
-			MaxConnectionLifetime: time.Hour,
-			MaxConnIdleTime:       30 * time.Minute,
-			HealthCheckPeriod:     time.Minute,
-		})
-		err := db.Connect(ctx)
+		config := testConfig()
+		config.DBName = "wrong-name"
+		pool, err := newPool(ctx, config.sanitize())
 		s.Assert().Error(err)
+		s.Assert().Nil(pool)
 	})
 
 	s.Run("with invalid database user", func() {
-		ctx := context.TODO()
-		db := New(&Config{
-			DBUser:                "test-user",
-			DBName:                "testdb",
-			DBPassword:            "test",
-			DBSchema:              s.container.Schema(),
-			DBHost:                s.container.Host(),
-			DBPort:                s.container.Port(),
-			MaxConnections:        4,
-			MinConnections:        0,
-			MaxConnectionLifetime: time.Hour,
-			MaxConnIdleTime:       30 * time.Minute,
-			HealthCheckPeriod:     time.Minute,
-		})
-		err := db.Connect(ctx)
+		config := testConfig()
+		config.DBUser = "test-user"
+		pool, err := newPool(ctx, config.sanitize())
 		s.Assert().Error(err)
+		s.Assert().Nil(pool)
 	})
 
 	s.Run("with invalid database password", func() {
-		ctx := context.TODO()
-		db := New(&Config{
-			DBUser:                "test",
-			DBName:                "testdb",
-			DBPassword:            "invalid-db-pass",
-			DBSchema:              s.container.Schema(),
-			DBHost:                s.container.Host(),
-			DBPort:                s.container.Port(),
-			MaxConnections:        4,
-			MinConnections:        0,
-			MaxConnectionLifetime: time.Hour,
-			MaxConnIdleTime:       30 * time.Minute,
-			HealthCheckPeriod:     time.Minute,
-		})
-
-		err := db.Connect(ctx)
+		config := testConfig()
+		config.DBPassword = "invalid-db-pass"
+		pool, err := newPool(ctx, config.sanitize())
 		s.Assert().Error(err)
+		s.Assert().Nil(pool)
 	})
 }
 
-func (s *PostgresTestSuite) TestExec() {
+func (s *PoolTestSuite) TestExec() {
 	ctx := context.TODO()
-	db := s.container.GetTestDB()
-	err := db.Connect(ctx)
-	s.Assert().NoError(err)
+	db, err := dbHandle(ctx)
+	s.Require().NoError(err)
+	defer func() { _ = db.Disconnect(ctx) }()
 
 	s.Run("with valid SQL statement", func() {
-		// let us create a test table
+		s.Require().NoError(db.DropTable(ctx, "accounts"))
 		const schemaDDL = `
 		CREATE TABLE accounts
 		(
@@ -173,49 +176,34 @@ func (s *PostgresTestSuite) TestExec() {
 	})
 }
 
-func (s *PostgresTestSuite) TestSelect() {
+func (s *PoolTestSuite) TestSelectOne() {
 	ctx := context.TODO()
-	db := s.container.GetTestDB()
-	err := db.Connect(ctx)
-	s.Assert().NoError(err)
+	db, err := dbHandle(ctx)
+	s.Require().NoError(err)
+	defer func() { _ = db.Disconnect(ctx) }()
 
 	const selectSQL = `SELECT account_id, account_name FROM accounts WHERE account_id = $1`
 
 	s.Run("with valid record", func() {
-		// first drop the table
-		err = db.DropTable(ctx, "accounts")
-		s.Assert().NoError(err)
+		s.Require().NoError(db.DropTable(ctx, "accounts"))
+		s.Require().NoError(createTable(ctx, db))
 
-		// create the database table
-		err = createTable(ctx, db)
-		s.Assert().NoError(err)
-
-		// let us insert into that table
 		inserted := &account{
 			AccountID:   uuid.New().String(),
 			AccountName: "some-account",
 		}
-		err = insertInto(ctx, db, inserted)
-		s.Assert().NoError(err)
+		s.Require().NoError(insertInto(ctx, db, inserted))
 
-		// let us select the record inserted
 		selected := &account{}
 		err = db.Select(ctx, selected, selectSQL, inserted.AccountID)
 		s.Assert().NoError(err)
-
-		// let us compare the selected data and the record added
 		s.Assert().Equal(inserted.AccountID, selected.AccountID)
 		s.Assert().Equal(inserted.AccountName, selected.AccountName)
 	})
 
 	s.Run("with no records", func() {
-		// first drop the table
-		err = db.DropTable(ctx, "accounts")
-		s.Assert().NoError(err)
-
-		// create the database table
-		err = createTable(ctx, db)
-		s.Assert().NoError(err)
+		s.Require().NoError(db.DropTable(ctx, "accounts"))
+		s.Require().NoError(createTable(ctx, db))
 
 		var selected *account
 		err = db.Select(ctx, selected, selectSQL, uuid.New().String())
@@ -231,46 +219,33 @@ func (s *PostgresTestSuite) TestSelect() {
 	})
 }
 
-func (s *PostgresTestSuite) TestSelectAll() {
+func (s *PoolTestSuite) TestSelectAll() {
 	ctx := context.TODO()
-	db := s.container.GetTestDB()
-	err := db.Connect(ctx)
-	s.Assert().NoError(err)
+	db, err := dbHandle(ctx)
+	s.Require().NoError(err)
+	defer func() { _ = db.Disconnect(ctx) }()
 
 	const selectSQL = `SELECT account_id, account_name FROM accounts;`
 
 	s.Run("with valid records", func() {
-		// first drop the table
-		err = db.DropTable(ctx, "accounts")
-		s.Assert().NoError(err)
+		s.Require().NoError(db.DropTable(ctx, "accounts"))
+		s.Require().NoError(createTable(ctx, db))
 
-		// create the database table
-		err = createTable(ctx, db)
-		s.Assert().NoError(err)
-
-		// let us insert into that table
 		inserted := &account{
 			AccountID:   uuid.New().String(),
 			AccountName: "some-account",
 		}
-		err = insertInto(ctx, db, inserted)
-		s.Assert().NoError(err)
+		s.Require().NoError(insertInto(ctx, db, inserted))
 
-		// let us select the record inserted
 		var selected []*account
 		err = db.SelectAll(ctx, &selected, selectSQL)
 		s.Assert().NoError(err)
-		s.Assert().Equal(1, len(selected))
+		s.Assert().Len(selected, 1)
 	})
 
 	s.Run("with no records", func() {
-		// first drop the table
-		err = db.DropTable(ctx, "accounts")
-		s.Assert().NoError(err)
-
-		// create the database table
-		err = createTable(ctx, db)
-		s.Assert().NoError(err)
+		s.Require().NoError(db.DropTable(ctx, "accounts"))
+		s.Require().NoError(createTable(ctx, db))
 
 		var selected []*account
 		err = db.SelectAll(ctx, &selected, selectSQL)
@@ -286,11 +261,10 @@ func (s *PostgresTestSuite) TestSelectAll() {
 	})
 }
 
-func (s *PostgresTestSuite) TestClose() {
+func (s *PoolTestSuite) TestDisconnect() {
 	ctx := context.TODO()
-	db := s.container.GetTestDB()
-	err := db.Connect(ctx)
-	s.Assert().NoError(err)
+	db, err := dbHandle(ctx)
+	s.Require().NoError(err)
 
 	// close the db connection
 	err = db.Disconnect(ctx)
@@ -302,21 +276,20 @@ func (s *PostgresTestSuite) TestClose() {
 	s.Assert().EqualError(err, "closed pool")
 }
 
-func createTable(ctx context.Context, db Postgres) error {
-	// let us create a test table
+func createTable(ctx context.Context, db *TestDB) error {
 	const schemaDDL = `
 		CREATE TABLE IF NOT EXISTS accounts
 		(
 		    account_id		UUID,
 			account_name 	VARCHAR(255)  NOT NULL,
 		    PRIMARY KEY (account_id)
-		);	
+		);
 	`
 	_, err := db.Exec(ctx, schemaDDL)
 	return err
 }
 
-func insertInto(ctx context.Context, db Postgres, account *account) error {
+func insertInto(ctx context.Context, db *TestDB, account *account) error {
 	const insertSQL = `INSERT INTO accounts(account_id, account_name) VALUES($1, $2);`
 	_, err := db.Exec(ctx, insertSQL, account.AccountID, account.AccountName)
 	return err
