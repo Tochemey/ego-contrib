@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+# The token only needs to read the repository: nothing in these jobs writes back to GitHub
+permissions:
+  contents: read
+
 jobs:
   commitlint:
     runs-on: ubuntu-latest

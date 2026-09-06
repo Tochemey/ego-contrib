@@ -8,9 +8,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# The token only needs to read the repository: nothing in these jobs writes back to GitHub
+permissions:
+  contents: read
+
 jobs:
   commitlint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # the action lists the commits of the pull request
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
         with:
