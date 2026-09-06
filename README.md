@@ -16,6 +16,7 @@ Plug any module into eGo's persistence APIs and mix durable state, event journal
 | PostgreSQL       | [README](./durablestore/postgres/README.md)  | [Schema](./durablestore/postgres/resources/durablestore_postgres.sql) | `go get github.com/tochemey/ego-contrib/durablestore/postgres`  |
 | DynamoDB  | [README](./durablestore/dynamodb/README.md)  | --                                                                    | `go get github.com/tochemey/ego-contrib/durablestore/dynamodb`  |
 | Cassandra | [README](./durablestore/cassandra/README.md) | [Schema](./durablestore/cassandra/resources/states_store.sql)         | `go get github.com/tochemey/ego-contrib/durablestore/cassandra` |
+| SlateDB   | [README](./durablestore/slatedb/README.md)   | --                                                                    | `go get github.com/tochemey/ego-contrib/durablestore/slatedb`   |
 
 ### Event Stores
 
@@ -47,7 +48,7 @@ Missing a backend you need? [Open an issue](https://github.com/Tochemey/ego-cont
 
 ## Repository Structure
 
-- `durablestore/` -- durable state stores (memory, PostgreSQL, DynamoDB, Cassandra)
+- `durablestore/` -- durable state stores (memory, PostgreSQL, DynamoDB, Cassandra, SlateDB)
 - `eventstore/` -- event journals for event-sourced behaviors
 - `offsetstore/` -- projection offset stores for eGo projections
 - `snapshotstore/` -- snapshot stores for eGo snapshot-based persistence
