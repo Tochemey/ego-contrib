@@ -5,7 +5,7 @@ This module implements [eGo](https://github.com/Tochemey/ego)'s event journal on
 It satisfies the `github.com/tochemey/ego/v3/persistence.EventsStore` interface and is ideal for unit tests, lightweight benchmarks, and prototypes where durability is not required.
 
 ## Features
-- Full implementation of the EventsStore contract: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `GetShardEvents`, `ShardNumbers`, and more
+- Full implementation of the EventsStore contract: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `GetShardEvents`, `ShardOffsets`, and more
 - Uses `hashicorp/go-memdb` for deterministic, thread-safe queries
 - Optional `KeepRecordsAfterDisconnect` flag for test scenarios that reuse the store
 - Automatic `Connect`/`Disconnect` lifecycle that clears memory unless instructed otherwise
@@ -84,7 +84,7 @@ func main() {
 - `PersistenceIDs` supports pagination via `pageSize` and `pageToken`
 - `GetShardEvents` streams events for a shard after a timestamp offset, helping projection pipelines
 - `DeleteEvents` removes all events up to an inclusive sequence number (useful for snapshotting tests)
-- `ShardNumbers` exposes which shards currently have events in memory
+- `ShardOffsets` maps every shard that has events in memory to the timestamp of its latest event
 
 ## Testing
 ```bash
