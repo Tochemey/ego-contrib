@@ -11,9 +11,13 @@ use (
 	./durablestore/dynamodb
 	./durablestore/memory
 	./durablestore/postgres
+	./durablestore/sqlite
 	./eventstore/memory
 	./eventstore/postgres
+	./eventstore/sqlite
 	./offsetstore/memory
 	./offsetstore/postgres
+	./offsetstore/sqlite
 	./snapshotstore/postgres
+	./snapshotstore/sqlite
 )

@@ -1,33 +1,25 @@
 # Snapshot Store (PostgreSQL)
 
 ## Overview
-This module wires [eGo](https://github.com/Tochemey/ego)'s snapshot API to PostgreSQL.
-It uses `github.com/jackc/pgx/v5` with a connection pool and persists snapshots in the `snapshots_store` table, keeping both the serialized protobuf payload and its manifest so the actor state can be rebuilt when requested.
 
-## Features
-- Implements `github.com/tochemey/ego/v4/persistence.SnapshotStore`
-- Connection pooling via `pgxpool` with sensible defaults (4 max connections), or bring your own pool through `NewSnapshotStoreWithPool`
-- Idempotent `INSERT ... ON CONFLICT` upsert keyed on `(persistence_id, sequence_number)`
-- SQL builder based on `github.com/Masterminds/squirrel`
+This module persists the snapshots of [eGo](https://github.com/Tochemey/ego) event-sourced entities in PostgreSQL.
+It implements `github.com/tochemey/ego/v4/persistence.SnapshotStore` on top of `github.com/jackc/pgx/v5`.
+
+A snapshot is the state of an entity at a given sequence number.
+Recovering an entity from its latest snapshot and replaying only the events written after it is far cheaper than replaying a whole journal.
+The state is stored as protobuf bytes together with the full name of its message, so it can be unmarshalled back into the right type.
+
+The store either builds its own connection pool from a `Config` or runs on a `pgxpool.Pool` you already own.
 
 ## Schema
-Apply the included DDL before starting your actor system:
+
+Apply the DDL before starting your application:
+
 ```bash
-psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" \
-  -f resources/snapshotstore_postgres.sql
+psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" -f resources/snapshotstore_postgres.sql
 ```
 
-The table layout:
-
-| Column              | Type          | Notes                                      |
-|---------------------|---------------|--------------------------------------------|
-| `persistence_id`    | `VARCHAR(255)`| Composite primary key                      |
-| `sequence_number`   | `BIGINT`      | Composite primary key                      |
-| `state_payload`     | `BYTEA`       | Serialized protobuf bytes                  |
-| `state_manifest`    | `VARCHAR(255)`| Fully qualified protobuf message name      |
-| `timestamp`         | `BIGINT`      | Unix epoch milliseconds                    |
-| `encryption_key_id` | `VARCHAR(255)`| Encryption key identifier (default empty)  |
-| `is_encrypted`      | `BOOLEAN`     | Whether the payload is encrypted           |
+It creates the `snapshots_store` table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS snapshots_store(
@@ -42,103 +34,141 @@ CREATE TABLE IF NOT EXISTS snapshots_store(
 );
 ```
 
-> Use the `DBSchema` option to scope the store to a specific schema when required.
+The primary key makes a persistence id and a sequence number unique together, so an entity keeps several snapshots and writing the same sequence number twice replaces the row instead of failing.
+The encryption columns record whether the payload was encrypted and under which key, when eGo is configured with an encryptor.
+
+To keep the table in a schema other than the default one, create it there and set `Config.DBSchema` to that schema name.
 
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/snapshotstore/postgres
+go get github.com/tochemey/ego-contrib/snapshotstore/postgres@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create a store that owns its pool
+
+Give the store a `Config` and it opens a pool on `Connect` and closes it on `Disconnect`:
+
 ```go
-package main
+store := postgres.NewSnapshotStore(&postgres.Config{
+    DBHost:     "127.0.0.1",
+    DBPort:     5432,
+    DBName:     "ego",
+    DBUser:     "ego",
+    DBPassword: "secret",
+    DBSchema:   "public",
+})
 
-import (
-	"context"
-	"log"
-	"time"
-
-	snapstore "github.com/tochemey/ego-contrib/snapshotstore/postgres"
-	"github.com/tochemey/ego/v4/egopb"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	accountpb "github.com/acme/billing/proto" // imaginary protobuf package used for examples
-)
-
-func main() {
-	ctx := context.Background()
-
-	cfg := &snapstore.Config{
-		DBHost:     "127.0.0.1",
-		DBPort:     5432,
-		DBName:     "ego",
-		DBUser:     "ego",
-		DBPassword: "secret",
-		DBSchema:   "public",
-	}
-
-	store := snapstore.NewSnapshotStore(cfg)
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect snapshot store: %v", err)
-	}
-	defer store.Disconnect(ctx)
-
-	payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
-
-	snapshot := &egopb.Snapshot{
-		PersistenceId:  "account-42",
-		SequenceNumber: 1,
-		State:          payload,
-		Timestamp:      time.Now().UnixMilli(),
-	}
-
-	if err := store.WriteSnapshot(ctx, snapshot); err != nil {
-		log.Fatalf("persist snapshot: %v", err)
-	}
-
-	latest, err := store.GetLatestSnapshot(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("fetch snapshot: %v", err)
-	}
-	log.Printf("latest sequence: %d", latest.GetSequenceNumber())
+if err := store.Connect(ctx); err != nil {
+    return err
 }
+defer store.Disconnect(ctx)
 ```
 
-> **Reminder:** The store relies on `protoregistry.GlobalTypes`. Import the protobuf packages that define your state messages so their descriptors are registered before you read from the database.
+`Config` also carries the pool settings. Leave a field empty to take its default:
 
-## Bringing your own connection pool
-`NewSnapshotStore` builds and owns a `pgxpool.Pool` from `Config`: `Connect` opens it and `Disconnect` closes it.
-`Config` also carries the pool settings (`MaxConnections`, `MinConnections`, `MaxConnectionLifetime`, `MaxConnIdleTime`, `HealthCheckPeriod`) and `DBSSLMode`, with sensible defaults when left empty.
+| Field | Default | Meaning |
+|---|---|---|
+| `DBSSLMode` | `disable` | SSL mode of the connection |
+| `MaxConnections` | 4 | Largest number of connections in the pool |
+| `MinConnections` | 0 | Number of connections kept open when idle |
+| `MaxConnectionLifetime` | 1 hour | Age at which a connection is closed |
+| `MaxConnIdleTime` | 30 minutes | Idle time after which a connection is closed |
+| `HealthCheckPeriod` | 1 minute | Interval between health checks of idle connections |
 
-When your application already manages a pool, or when several stores must share one, hand it over with `NewSnapshotStoreWithPool`:
+### Run on a pool you own
+
+When your application already has a pool, or when several stores must share one, pass it in.
+`Connect` then only pings the pool and `Disconnect` leaves it open:
 
 ```go
 pool, err := pgxpool.New(ctx, "postgres://ego:secret@127.0.0.1:5432/ego?search_path=public")
 if err != nil {
-	log.Fatalf("create pool: %v", err)
+    return err
 }
 defer pool.Close()
 
-store := snapstore.NewSnapshotStoreWithPool(pool)
-if err := store.Connect(ctx); err != nil { // only pings the pool
-	log.Fatalf("connect store: %v", err)
+store := postgres.NewSnapshotStoreWithPool(pool)
+if err := store.Connect(ctx); err != nil {
+    return err
 }
-defer store.Disconnect(ctx) // never closes a pool it did not create
+defer store.Disconnect(ctx)
 ```
 
-The store only depends on the `Pool` interface (`Exec`, `Query`, `Ping`), which `*pgxpool.Pool` satisfies as is.
-Any type with those methods works too, for instance a pool wrapped for tracing or `pgxmock.PgxPoolIface` in unit tests.
-Ownership stays with the caller: `Disconnect` never closes a pool it did not create, so a single pool can back the event, snapshot, durable state and offset stores at once.
+The store depends on the `Pool` interface, which declares `Exec`, `Query` and `Ping`.
+A `*pgxpool.Pool` satisfies it as is, and so does any wrapper of your own, for instance one that adds tracing.
+`Close` is deliberately absent, so a store never closes a pool it did not create.
+The same pool can therefore back the event, snapshot, durable state and offset stores of one application.
+Those four modules all declare a package named `postgres`, so alias them on import when you use more than one:
+
+```go
+import (
+    eventstore "github.com/tochemey/ego-contrib/eventstore/postgres"
+    snapshotstore "github.com/tochemey/ego-contrib/snapshotstore/postgres"
+)
+```
+
+### Plug the store into eGo
+
+Pass the store to `ego.WithSnapshotStore`, alongside the events store whose entities are being snapshotted:
+
+```go
+config := ego.NewConfig(eventsStore, ego.WithSnapshotStore(store))
+
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
+
+engine, err := ego.NewEngine(actorSystem, config)
+```
+
+eGo decides when to take a snapshot and calls the store itself, so writing snapshots by hand is only needed when you use the store outside of an engine.
+
+### Write and read a snapshot directly
+
+`WriteSnapshot` inserts the snapshot, or replaces it when one already exists at that sequence number:
+
+```go
+payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
+if err != nil {
+    return err
+}
+
+err = store.WriteSnapshot(ctx, &egopb.Snapshot{
+    PersistenceId:  "account-42",
+    SequenceNumber: 100,
+    State:          payload,
+    Timestamp:      time.Now().UnixMilli(),
+})
+```
+
+`GetLatestSnapshot` returns the snapshot with the highest sequence number, or `nil` when the entity has none:
+
+```go
+snapshot, err := store.GetLatestSnapshot(ctx, "account-42")
+if snapshot == nil {
+    // recover from the journal alone
+}
+```
+
+`DeleteSnapshots` prunes the older snapshots of an entity up to a sequence number, included.
+Keep the latest one, otherwise recovery falls back to a full replay:
+
+```go
+err := store.DeleteSnapshots(ctx, "account-42", snapshot.GetSequenceNumber()-1)
+```
+
+### Unmarshalling on read
+
+The store resolves the state through `protoregistry.GlobalTypes` using the manifest recorded next to the payload.
+Import the generated packages of your state messages in the binary that reads them, otherwise the lookup fails.
 
 ## Testing
-- Unit and integration suites: `go test ./...`
-- Docker-based harness: `snapshotstore/postgres/helper_test.go` spins up PostgreSQL through Testcontainers-Go
-- Repository-wide recipe: run `make test` from the repository root, or `make test/snapshotstore/postgres` for this module only
 
-## Operational Notes
-- Pool settings (sizes, lifetimes, health checks) and the SSL mode are fields of `Config`; leave them empty for the defaults, or bring your own pool
-- `Ping` automatically opens the connection if it has not been established
-- Errors from `WriteSnapshot` include context on failed inserts; bubble them up to your supervisor logic for proper retry handling
+`go test ./...` runs the suite. Docker must be running, since the integration tests start PostgreSQL with Testcontainers-Go.
+The unit tests run the store on a `pgxmock` pool through `NewSnapshotStoreWithPool`, which needs no database.
+
+From the repository root, `make test/snapshotstore/postgres` runs the same suite.

@@ -1,146 +1,166 @@
 # Durable State Store (PostgreSQL)
 
 ## Overview
-This module wires [eGo](https://github.com/Tochemey/ego)'s durable state API to PostgreSQL. 
-It uses `github.com/jackc/pgx/v5` with a connection pool and persists durable states in the `states_store` table, keeping both the serialized protobuf payload and its manifest so the actor state can be rebuilt when requested.
 
-## Features
-- Implements `github.com/tochemey/ego/v4/persistence.StateStore`
-- Connection pooling via `pgxpool` with sensible defaults (4 max connections), or bring your own pool through `NewDurableStoreWithPool`
-- Idempotent `INSERT ... ON CONFLICT` upsert for each `PersistenceID`
-- SQL builder based on `github.com/Masterminds/squirrel`
+This module persists the durable state of [eGo](https://github.com/Tochemey/ego) entities in PostgreSQL.
+It implements `github.com/tochemey/ego/v4/persistence.StateStore` on top of `github.com/jackc/pgx/v5`.
+
+A durable state entity keeps no journal. Only its latest state is stored, as protobuf bytes together with the full name of its message, so it can be unmarshalled back into the right type when the entity restarts.
+Each write is an upsert on the persistence id, so the table holds exactly one row per entity.
+
+The store either builds its own connection pool from a `Config` or runs on a `pgxpool.Pool` you already own.
 
 ## Schema
-Apply the included DDL before starting your actor system:
+
+Apply the DDL before starting your application:
+
 ```bash
-psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" \
-  -f resources/durablestore_postgres.sql
+psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" -f resources/durablestore_postgres.sql
 ```
 
-The table layout:
-
-| Column           | Type          | Notes                                                      |
-|------------------|---------------|------------------------------------------------------------|
-| `persistence_id` | `VARCHAR(255)`| Primary key                                                |
-| `version_number` | `BIGINT`      | Latest durable version for that persistence ID             |
-| `state_payload`  | `BYTEA`       | Serialized protobuf bytes                                  |
-| `state_manifest` | `VARCHAR(255)`| Fully qualified protobuf message name                      |
-| `timestamp`      | `BIGINT`      | Unix epoch milliseconds                                    |
-| `shard_number`   | `BIGINT`      | Optional helper for sharded deployments                    |
+It creates the `states_store` table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS states_store
 (
-    persistence_id  VARCHAR(255) PRIMARY KEY,
-    version_number  BIGINT       NOT NULL,
-    state_payload   BYTEA        NOT NULL,
-    state_manifest  VARCHAR(255) NOT NULL,
-    timestamp       BIGINT       NOT NULL,
-    shard_number    BIGINT       NOT NULL
+    persistence_id  VARCHAR(255)          PRIMARY KEY,
+    version_number  BIGINT                NOT NULL,
+    state_payload   BYTEA                 NOT NULL,
+    state_manifest  VARCHAR(255)          NOT NULL,
+    timestamp       BIGINT                NOT NULL,
+    shard_number    BIGINT                NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_states_store_version_number
-    ON states_store (version_number);
 ```
 
-> Use the `DBSchema` option to scope the store to a specific schema when required.
+The persistence id is the primary key, which is what makes the write an upsert.
+`version_number` is incremented by eGo on every state change and `state_manifest` holds the protobuf message name used to rebuild the state.
+
+To keep the table in a schema other than the default one, create it there and set `Config.DBSchema` to that schema name.
 
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/durablestore/postgres
+go get github.com/tochemey/ego-contrib/durablestore/postgres@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create a store that owns its pool
+
+Give the store a `Config` and it opens a pool on `Connect` and closes it on `Disconnect`:
+
 ```go
-package main
+store := postgres.NewDurableStore(&postgres.Config{
+    DBHost:     "127.0.0.1",
+    DBPort:     5432,
+    DBName:     "ego",
+    DBUser:     "ego",
+    DBPassword: "secret",
+    DBSchema:   "public",
+})
 
-import (
-	"context"
-	"log"
-	"time"
-
-	pgstore "github.com/tochemey/ego-contrib/durablestore/postgres"
-	"github.com/tochemey/ego/v4/egopb"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	accountpb "github.com/acme/billing/proto" // imaginary protobuf package used for examples
-)
-
-func main() {
-	ctx := context.Background()
-
-	cfg := &pgstore.Config{
-		DBHost:     "127.0.0.1",
-		DBPort:     5432,
-		DBName:     "ego",
-		DBUser:     "ego",
-		DBPassword: "secret",
-		DBSchema:   "public",
-	}
-
-	store := pgstore.NewDurableStore(cfg)
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect postgres store: %v", err)
-	}
-	defer store.Disconnect(ctx)
-
-	payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
-
-	state := &egopb.DurableState{
-		PersistenceId:  "account-42",
-		VersionNumber:  2,
-		ResultingState: payload,
-		Timestamp:      time.Now().UnixMilli(),
-		Shard:          1,
-	}
-
-	if err := store.WriteState(ctx, state); err != nil {
-		log.Fatalf("persist state: %v", err)
-	}
-
-	snapshot, err := store.GetLatestState(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("fetch state: %v", err)
-	}
-	log.Printf("latest version: %d", snapshot.GetVersionNumber())
+if err := store.Connect(ctx); err != nil {
+    return err
 }
+defer store.Disconnect(ctx)
 ```
 
-> **Reminder:** The store relies on `protoregistry.GlobalTypes`. Import the protobuf packages that define your state messages so their descriptors are registered before you read from the database.
+`Config` also carries the pool settings. Leave a field empty to take its default:
 
-## Bringing your own connection pool
-`NewDurableStore` builds and owns a `pgxpool.Pool` from `Config`: `Connect` opens it and `Disconnect` closes it.
-`Config` also carries the pool settings (`MaxConnections`, `MinConnections`, `MaxConnectionLifetime`, `MaxConnIdleTime`, `HealthCheckPeriod`) and `DBSSLMode`, with sensible defaults when left empty.
+| Field | Default | Meaning |
+|---|---|---|
+| `DBSSLMode` | `disable` | SSL mode of the connection |
+| `MaxConnections` | 4 | Largest number of connections in the pool |
+| `MinConnections` | 0 | Number of connections kept open when idle |
+| `MaxConnectionLifetime` | 1 hour | Age at which a connection is closed |
+| `MaxConnIdleTime` | 30 minutes | Idle time after which a connection is closed |
+| `HealthCheckPeriod` | 1 minute | Interval between health checks of idle connections |
 
-When your application already manages a pool, or when several stores must share one, hand it over with `NewDurableStoreWithPool`:
+### Run on a pool you own
+
+When your application already has a pool, or when several stores must share one, pass it in.
+`Connect` then only pings the pool and `Disconnect` leaves it open:
 
 ```go
 pool, err := pgxpool.New(ctx, "postgres://ego:secret@127.0.0.1:5432/ego?search_path=public")
 if err != nil {
-	log.Fatalf("create pool: %v", err)
+    return err
 }
 defer pool.Close()
 
-store := pgstore.NewDurableStoreWithPool(pool)
-if err := store.Connect(ctx); err != nil { // only pings the pool
-	log.Fatalf("connect store: %v", err)
+store := postgres.NewDurableStoreWithPool(pool)
+if err := store.Connect(ctx); err != nil {
+    return err
 }
-defer store.Disconnect(ctx) // never closes a pool it did not create
+defer store.Disconnect(ctx)
 ```
 
-The store only depends on the `Pool` interface (`Exec`, `Query`, `Ping`), which `*pgxpool.Pool` satisfies as is.
-Any type with those methods works too, for instance a pool wrapped for tracing or `pgxmock.PgxPoolIface` in unit tests.
-Ownership stays with the caller: `Disconnect` never closes a pool it did not create, so a single pool can back the event, snapshot, durable state and offset stores at once.
+The store depends on the `Pool` interface, which declares `Exec`, `Query` and `Ping`.
+A `*pgxpool.Pool` satisfies it as is, and so does any wrapper of your own, for instance one that adds tracing.
+`Close` is deliberately absent, so a store never closes a pool it did not create.
+The same pool can therefore back the event, snapshot, durable state and offset stores of one application.
+Those four modules all declare a package named `postgres`, so alias them on import when you use more than one:
+
+```go
+import (
+    eventstore "github.com/tochemey/ego-contrib/eventstore/postgres"
+    snapshotstore "github.com/tochemey/ego-contrib/snapshotstore/postgres"
+)
+```
+
+### Plug the store into eGo
+
+Pass the store to `ego.WithStateStore`. Durable state deployments that host no event-sourced entity pass `nil` as the events store:
+
+```go
+config := ego.NewConfig(nil, ego.WithStateStore(store))
+
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
+
+engine, err := ego.NewEngine(actorSystem, config)
+```
+
+eGo calls `Connect` and `Ping` on the store itself, so connecting by hand is only needed when you use the store outside of an engine.
+
+### Write and read a state directly
+
+`WriteState` upserts the row of the entity. Writing a state whose version is lower than the stored one overwrites it, so let eGo own the version numbering:
+
+```go
+payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
+if err != nil {
+    return err
+}
+
+err = store.WriteState(ctx, &egopb.DurableState{
+    PersistenceId:  "account-42",
+    VersionNumber:  2,
+    ResultingState: payload,
+    Timestamp:      time.Now().UnixMilli(),
+    Shard:          3,
+})
+```
+
+`GetLatestState` returns the stored state, or `nil` when the entity has never been written:
+
+```go
+state, err := store.GetLatestState(ctx, "account-42")
+if state == nil {
+    // no state recorded for this entity
+}
+```
+
+### Unmarshalling on read
+
+The store resolves the state through `protoregistry.GlobalTypes` using the manifest recorded next to the payload.
+Import the generated packages of your state messages in the binary that reads them, otherwise the lookup fails.
 
 ## Testing
-- Unit and integration suites: `go test ./...`
-- Docker-based harness: `durablestore/postgres/helper_test.go` spins up PostgreSQL 11 through Testcontainers-Go and exposes helpers such as `SchemaUtils`
-- Repository-wide recipe: run `make test` from the repository root, or `make test/durablestore/postgres` for this module only
 
-## Operational Notes
-- Pool settings (sizes, lifetimes, health checks) and the SSL mode are fields of `Config`; leave them empty for the defaults, or bring your own pool
-- `Ping` automatically opens the connection if it has not been established
-- Errors from `WriteState` include context on failed inserts or rollbacks; bubble them up to your supervisor logic for proper retry handling
+`go test ./...` runs the suite. Docker must be running, since the integration tests start PostgreSQL with Testcontainers-Go.
+The unit tests run the store on a `pgxmock` pool through `NewDurableStoreWithPool`, which needs no database.
+
+From the repository root, `make test/durablestore/postgres` runs the same suite.

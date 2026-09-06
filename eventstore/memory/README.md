@@ -1,99 +1,116 @@
-# Events Store (Memory Backend)
+# Events Store (Memory)
 
 ## Overview
-This module implements [eGo](https://github.com/Tochemey/ego)'s event journal on top of HashiCorp's in-memory `memdb`. 
-It satisfies the `github.com/tochemey/ego/v3/persistence.EventsStore` interface and is ideal for unit tests, lightweight benchmarks, and prototypes where durability is not required.
 
-## Features
-- Full implementation of the EventsStore contract: `WriteEvents`, `PersistenceIDs`, `ReplayEvents`, `GetShardEvents`, `ShardOffsets`, and more
-- Uses `hashicorp/go-memdb` for deterministic, thread-safe queries
-- Optional `KeepRecordsAfterDisconnect` flag for test scenarios that reuse the store
-- Automatic `Connect`/`Disconnect` lifecycle that clears memory unless instructed otherwise
+This module keeps [eGo](https://github.com/Tochemey/ego) event journals in memory.
+It implements `github.com/tochemey/ego/v4/persistence.EventsStore` on top of `github.com/hashicorp/go-memdb`, which gives it indexed lookups and transactional reads without a database.
+
+Nothing survives the process. This store is meant for unit tests, examples and prototypes, not for production.
+
+## Schema
+
+None. The store creates its own in-memory tables on `Connect`, so there is nothing to provision.
 
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/eventstore/memory
+go get github.com/tochemey/ego-contrib/eventstore/memory@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create the store
+
+The constructor takes no argument:
+
 ```go
-package main
+store := memory.NewEventsStore()
 
-import (
-	"context"
-	"log"
-	"time"
-
-	memory "github.com/tochemey/ego-contrib/eventstore/memory"
-	"github.com/tochemey/ego/v3/egopb"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	accountpb "github.com/acme/billing/proto"
-)
-
-func main() {
-	ctx := context.Background()
-
-	store := memory.NewEventsStore()
-	store.KeepRecordsAfterDisconnect = true // optional: keep data between reconnects during tests
-
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect memory store: %v", err)
-	}
-	defer store.Disconnect(ctx)
-
-	eventPayload, err := anypb.New(&accountpb.AccountOpened{AccountId: "account-42"})
-	if err != nil {
-		log.Fatalf("wrap event payload: %v", err)
-	}
-	statePayload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 1000})
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
-
-	event := &egopb.Event{
-		PersistenceId:  "account-42",
-		SequenceNumber: 1,
-		Event:          eventPayload,
-		ResultingState: statePayload,
-		Timestamp:      time.Now().UnixMilli(),
-		Shard:          0,
-	}
-
-	if err := store.WriteEvents(ctx, []*egopb.Event{event}); err != nil {
-		log.Fatalf("append event: %v", err)
-	}
-
-	latest, err := store.GetLatestEvent(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("read last event: %v", err)
-	}
-	log.Printf("last seq number: %d", latest.GetSequenceNumber())
-
-	events, err := store.ReplayEvents(ctx, "account-42", 1, 10, 100)
-	if err != nil {
-		log.Fatalf("replay: %v", err)
-	}
-	log.Printf("replayed %d events", len(events))
+if err := store.Connect(ctx); err != nil {
+    return err
 }
+defer store.Disconnect(ctx)
 ```
 
-> **Important:** Event and state payloads are stored as protobuf bytes along with their manifests. Import the packages that define those messages so the descriptors are available via `protoregistry.GlobalTypes`.
+`Disconnect` clears every event it holds. Set `KeepRecordsAfterDisconnect` when a test reconnects the same store and expects its events to still be there:
 
-## Capabilities
-- `PersistenceIDs` supports pagination via `pageSize` and `pageToken`
-- `GetShardEvents` streams events for a shard after a timestamp offset, helping projection pipelines
-- `DeleteEvents` removes all events up to an inclusive sequence number (useful for snapshotting tests)
-- `ShardOffsets` maps every shard that has events in memory to the timestamp of its latest event
+```go
+store := memory.NewEventsStore()
+store.KeepRecordsAfterDisconnect = true
+```
+
+### Plug the store into eGo
+
+The events store is the first argument of `ego.NewConfig`:
+
+```go
+config := ego.NewConfig(store)
+
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
+
+engine, err := ego.NewEngine(actorSystem, config)
+```
+
+Swapping this store for the PostgreSQL one is a one-line change, since both satisfy the same interface.
+A test can therefore exercise the same entities as production without a database.
+
+### Write and read events directly
+
+`WriteEvents` appends a batch:
+
+```go
+payload, err := anypb.New(&accountpb.AccountOpened{AccountId: "account-42"})
+if err != nil {
+    return err
+}
+
+err = store.WriteEvents(ctx, []*egopb.Event{
+    {
+        PersistenceId:  "account-42",
+        SequenceNumber: 1,
+        Event:          payload,
+        Timestamp:      time.Now().UnixMilli(),
+        Shard:          3,
+    },
+})
+```
+
+`ReplayEvents` returns the events of one entity between two sequence numbers, both included, and `GetLatestEvent` returns the last one, or `nil` when the entity has no event:
+
+```go
+events, err := store.ReplayEvents(ctx, "account-42", 1, 100, 500)
+latest, err := store.GetLatestEvent(ctx, "account-42")
+```
+
+`DeleteEvents` removes the events of an entity up to a sequence number, included:
+
+```go
+err := store.DeleteEvents(ctx, "account-42", 50)
+```
+
+### Read a shard for projections
+
+`ShardOffsets` maps every shard that holds events to the timestamp of its most recent event, which is how eGo finds the shards a projection still has to read:
+
+```go
+offsets, err := store.ShardOffsets(ctx) // for instance map[uint64]int64{3: 1712345678901}
+```
+
+`GetShardEvents` then reads the next events of a shard after an offset, and returns the offset to pass on the next call:
+
+```go
+events, nextOffset, err := store.GetShardEvents(ctx, 3, offset, 100)
+```
+
+### Unmarshalling on replay
+
+The store resolves each event through `protoregistry.GlobalTypes` using the manifest recorded next to the payload.
+Import the generated packages of your event messages, otherwise the lookup fails.
 
 ## Testing
-```bash
-go test ./...
-```
 
-From the repository root, `make test/eventstore/memory` runs the same suite through the shared Makefile.
-
-## Limitations
-- Not suitable for production; data vanishes on process exit (and by default on `Disconnect`)
-- Full scans are employed for some operations (e.g., `PersistenceIDs`), so very large datasets will be slower
-- No visibility into multi-process coordination; use only within a single test runner
+`go test ./...` runs the suite. No Docker and no database are needed.
+From the repository root, `make test/eventstore/memory` runs the same suite.

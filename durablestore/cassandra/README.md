@@ -1,32 +1,25 @@
 # Durable State Store (Cassandra)
 
 ## Overview
-This module persists durable state for [eGo](https://github.com/Tochemey/ego) on Apache Cassandra.
-It implements `github.com/tochemey/ego/v3/persistence.StateStore` using `github.com/apache/cassandra-gocql-driver/v2` and stores both the serialized protobuf payload and its manifest so snapshots can be rebuilt later.
 
-## Features
-- Implements `github.com/tochemey/ego/v3/persistence.StateStore`
-- Cassandra-native upsert semantics via `INSERT`
-- Configurable consistency and keyspace
-- Simple schema in `resources/states_store.sql`
+This module persists the durable state of [eGo](https://github.com/Tochemey/ego) entities in Apache Cassandra.
+It implements `github.com/tochemey/ego/v4/persistence.StateStore` on top of `github.com/apache/cassandra-gocql-driver/v2`.
+
+A durable state entity keeps no journal. Only its latest state is stored, as protobuf bytes together with the full name of its message, so it can be unmarshalled back into the right type when the entity restarts.
+Each write is a plain `INSERT`, which Cassandra applies as an upsert on the partition key, so the table holds one row per entity.
 
 ## Schema
-Create the keyspace and table before starting your actor system:
+
+Create the keyspace and the table before starting your application:
+
 ```bash
 cqlsh -e "CREATE KEYSPACE IF NOT EXISTS ego WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};"
 cqlsh -k ego -f resources/states_store.sql
 ```
 
-The table layout:
+The single-node replication above suits local work. Use `NetworkTopologyStrategy` with a replication factor per datacenter in a real cluster.
 
-| Column           | Type    | Notes                                   |
-|------------------|---------|-----------------------------------------|
-| `version_number` | `bigint`| Latest durable version                  |
-| `persistence_id` | `text`  | Identifier for the persisted entity     |
-| `state_payload`  | `blob`  | Serialized protobuf bytes               |
-| `state_manifest` | `text`  | Fully qualified protobuf message name   |
-| `timestamp`      | `bigint`| Unix epoch milliseconds                 |
-| `shard_number`   | `bigint`| Partition key for sharded deployments   |
+The DDL creates the `states_store` table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS states_store (
@@ -36,82 +29,95 @@ CREATE TABLE IF NOT EXISTS states_store (
     state_manifest  text,
     timestamp       bigint,
     shard_number    bigint,
-    PRIMARY KEY (shard_number, persistence_id)
+    PRIMARY KEY (persistence_id)
 );
 ```
 
+The persistence id is the partition key, so a state is read and written by a single-partition query.
+`version_number` is incremented by eGo on every state change and `state_manifest` holds the protobuf message name used to rebuild the state.
+
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/durablestore/cassandra
+go get github.com/tochemey/ego-contrib/durablestore/cassandra@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create the store
+
+The store takes the cluster address, the keyspace and the consistency to use:
+
 ```go
-package main
+store := cassandra.NewDurableStore(&cassandra.Config{
+    Cluster:     "127.0.0.1",
+    Keyspace:    "ego",
+    Consistency: gocql.Quorum,
+})
 
-import (
-	"context"
-	"log"
-	"time"
+if err := store.Connect(ctx); err != nil {
+    return err
+}
+defer store.Disconnect(ctx)
+```
 
-	cassstore "github.com/tochemey/ego-contrib/durablestore/cassandra"
-	"github.com/apache/cassandra-gocql-driver/v2"
-	"github.com/tochemey/ego/v3/egopb"
-	"google.golang.org/protobuf/types/known/anypb"
+`Connect` opens the session and `Disconnect` closes it. Both are safe to call more than once.
 
-	accountpb "github.com/acme/billing/proto" // import your generated protobuf packages
-)
+The consistency applies to every read and write the store issues.
+`gocql.Quorum` is the usual choice, since it keeps reads and writes consistent with each other on a replicated keyspace.
+`gocql.One` is faster but can return a state that a recent write has already replaced.
 
-func main() {
-	ctx := context.Background()
+### Plug the store into eGo
 
-	cfg := &cassstore.Config{
-		Cluster:     "127.0.0.1",
-		Keyspace:    "ego",
-		Consistency: gocql.LocalOne,
-	}
+Pass the store to `ego.WithStateStore`. Durable state deployments that host no event-sourced entity pass `nil` as the events store:
 
-	store := cassstore.NewDurableStore(cfg)
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect cassandra store: %v", err)
-	}
-	defer store.Disconnect(ctx)
+```go
+config := ego.NewConfig(nil, ego.WithStateStore(store))
 
-	payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
 
-	state := &egopb.DurableState{
-		PersistenceId:  "account-42",
-		VersionNumber:  1,
-		ResultingState: payload,
-		Timestamp:      time.Now().UnixMilli(),
-		Shard:          0,
-	}
+engine, err := ego.NewEngine(actorSystem, config)
+```
 
-	if err := store.WriteState(ctx, state); err != nil {
-		log.Fatalf("persist state: %v", err)
-	}
+### Write and read a state directly
 
-	snapshot, err := store.GetLatestState(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("load state: %v", err)
-	}
-	if snapshot == nil {
-		log.Println("no durable state yet")
-	}
+`WriteState` upserts the row of the entity:
+
+```go
+payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
+if err != nil {
+    return err
+}
+
+err = store.WriteState(ctx, &egopb.DurableState{
+    PersistenceId:  "account-42",
+    VersionNumber:  2,
+    ResultingState: payload,
+    Timestamp:      time.Now().UnixMilli(),
+    Shard:          3,
+})
+```
+
+`GetLatestState` returns the stored state, or `nil` when the entity has never been written:
+
+```go
+state, err := store.GetLatestState(ctx, "account-42")
+if state == nil {
+    // no state recorded for this entity
 }
 ```
 
-> **Reminder:** Ensure your protobuf packages are imported so their descriptors are registered in `protoregistry.GlobalTypes`; otherwise the store cannot rehydrate records.
+### Unmarshalling on read
+
+The store resolves the state through `protoregistry.GlobalTypes` using the manifest recorded next to the payload.
+Import the generated packages of your state messages in the binary that reads them, otherwise the lookup fails.
 
 ## Testing
-- Local stack: `go test ./...`
-- Docker-based harness: `durablestore/cassandra/helper_test.go` spins up Cassandra 5.0.6 using Testcontainers-Go
-- Repository-wide recipe: run `make test` from the repository root, or `make test/durablestore/cassandra` for this module only
 
-## Operational Notes
-- `GetLatestState` returns `(nil, nil)` when no durable state exists
-- Cassandra inserts are upserts; each write replaces the latest snapshot for a `PersistenceId`
-- Use a stable `Shard` value (for example `0`) if you do not plan to shard durable state
+`go test ./...` runs the suite. Docker must be running, since the tests start Cassandra with Testcontainers-Go and create the keyspace themselves.
+Starting the container takes a while, so expect the suite to run for about a minute.
+
+From the repository root, `make test/durablestore/cassandra` runs the same suite.

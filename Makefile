@@ -18,13 +18,17 @@ export GOWORK := off
 MODULES := \
 	eventstore/memory \
 	eventstore/postgres \
+	eventstore/sqlite \
 	durablestore/memory \
 	durablestore/postgres \
+	durablestore/sqlite \
 	durablestore/dynamodb \
 	durablestore/cassandra \
 	offsetstore/memory \
 	offsetstore/postgres \
-	snapshotstore/postgres
+	offsetstore/sqlite \
+	snapshotstore/postgres \
+	snapshotstore/sqlite
 
 GO_TEST_FLAGS       ?= -timeout 0 -race -v -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
 GOLANGCI_LINT_FLAGS ?= --timeout 10m

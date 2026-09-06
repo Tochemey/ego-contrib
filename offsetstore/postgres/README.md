@@ -1,124 +1,172 @@
 # Offset Store (PostgreSQL)
 
 ## Overview
-This package backs [eGo](https://github.com/Tochemey/ego) projection offsets with PostgreSQL. 
-It fulfils `github.com/tochemey/ego/v4/offsetstore.OffsetStore`, managing per-projection, per-shard offsets in a single table while handling the protobuf plumbing for you.
 
-## Features
-- Implements the complete OffsetStore contract (`WriteOffset`, `GetCurrentOffset`, `ResetOffset`, `Ping`, lifecycle methods)
-- `INSERT ... ON CONFLICT` upsert keyed on `(projection_name, shard_number)` guarantees a single row per projection/shard pair
-- Uses `pgxpool` under the hood with safe default connection settings, or bring your own pool through `NewOffsetStoreWithPool`
-- Schema-qualified deployments via `Config.DBSchema`
+This module persists the offsets of [eGo](https://github.com/Tochemey/ego) projections in PostgreSQL.
+It implements `github.com/tochemey/ego/v4/offsetstore.OffsetStore` on top of `github.com/jackc/pgx/v5`.
+
+A projection reads the events of each shard in order and records how far it got.
+That mark is the offset, and it is the timestamp of the last event the projection handled.
+Storing it is what lets a projection resume where it stopped instead of reprocessing a whole journal after a restart.
+
+Offsets are kept per projection and per shard, so the projections of one application advance independently and a projection can progress at a different pace on each shard.
+
+The store either builds its own connection pool from a `Config` or runs on a `pgxpool.Pool` you already own.
 
 ## Schema
-Run the included DDL before your application starts:
+
+Apply the DDL before starting your application:
+
 ```bash
-psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" \
-  -f resources/offsetstore_postgres.sql
+psql "postgres://user:pass@localhost:5432/ego?sslmode=disable" -f resources/offsetstore_postgres.sql
 ```
 
-Table columns:
+It creates the `offsets_store` table:
 
-| Column           | Type          | Notes                                         |
-|------------------|---------------|-----------------------------------------------|
-| `projection_name`| `VARCHAR(255)`| Part of the composite primary key             |
-| `shard_number`   | `BIGINT`      | Part of the composite primary key             |
-| `current_offset` | `BIGINT`      | Latest processed offset for that shard        |
-| `timestamp`      | `BIGINT`      | Unix epoch milliseconds of the latest update  |
+```sql
+CREATE TABLE IF NOT EXISTS offsets_store
+(
+    projection_name VARCHAR(255) NOT NULL,
+    shard_number    BIGINT       NOT NULL,
+    current_offset  BIGINT       NOT NULL,
+    timestamp       BIGINT       NOT NULL,
+    PRIMARY KEY (projection_name, shard_number)
+);
+```
+
+The primary key makes a projection name and a shard number unique together, so each write is an upsert and the table never holds more than one row per pair.
+`current_offset` is the position reached and `timestamp` records when it was last written.
+
+To keep the table in a schema other than the default one, create it there and set `Config.DBSchema` to that schema name.
 
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/offsetstore/postgres
+go get github.com/tochemey/ego-contrib/offsetstore/postgres@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create a store that owns its pool
+
+Give the store a `Config` and it opens a pool on `Connect` and closes it on `Disconnect`:
+
 ```go
-package main
+store := postgres.NewOffsetStore(&postgres.Config{
+    DBHost:     "127.0.0.1",
+    DBPort:     5432,
+    DBName:     "ego",
+    DBUser:     "ego",
+    DBPassword: "secret",
+    DBSchema:   "public",
+})
 
-import (
-	"context"
-	"log"
-	"time"
-
-	pgstore "github.com/tochemey/ego-contrib/offsetstore/postgres"
-	"github.com/tochemey/ego/v4/egopb"
-)
-
-func main() {
-	ctx := context.Background()
-
-	cfg := &pgstore.Config{
-		DBHost:     "127.0.0.1",
-		DBPort:     5432,
-		DBName:     "ego",
-		DBUser:     "ego",
-		DBPassword: "secret",
-		DBSchema:   "public",
-	}
-
-	store := pgstore.NewOffsetStore(cfg)
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect offset store: %v", err)
-	}
-	defer store.Disconnect(ctx)
-
-	offset := &egopb.Offset{
-		ShardNumber:    0,
-		ProjectionName: "accounts-projection",
-		Value:          42,
-		Timestamp:      time.Now().UnixMilli(),
-	}
-
-	if err := store.WriteOffset(ctx, offset); err != nil {
-		log.Fatalf("write offset: %v", err)
-	}
-
-	current, err := store.GetCurrentOffset(ctx, &egopb.ProjectionId{
-		ShardNumber:    0,
-		ProjectionName: "accounts-projection",
-	})
-	if err != nil {
-		log.Fatalf("read offset: %v", err)
-	}
-	log.Printf("current offset: %d", current.GetValue())
-
-	if err := store.ResetOffset(ctx, "accounts-projection", 0); err != nil {
-		log.Fatalf("reset offset: %v", err)
-	}
+if err := store.Connect(ctx); err != nil {
+    return err
 }
+defer store.Disconnect(ctx)
 ```
 
-## Bringing your own connection pool
-`NewOffsetStore` builds and owns a `pgxpool.Pool` from `Config`: `Connect` opens it and `Disconnect` closes it.
-`Config` also carries the pool settings (`MaxConnections`, `MinConnections`, `MaxConnectionLifetime`, `MaxConnIdleTime`, `HealthCheckPeriod`) and `DBSSLMode`, with sensible defaults when left empty.
+`Config` also carries the pool settings. Leave a field empty to take its default:
 
-When your application already manages a pool, or when several stores must share one, hand it over with `NewOffsetStoreWithPool`:
+| Field | Default | Meaning |
+|---|---|---|
+| `DBSSLMode` | `disable` | SSL mode of the connection |
+| `MaxConnections` | 4 | Largest number of connections in the pool |
+| `MinConnections` | 0 | Number of connections kept open when idle |
+| `MaxConnectionLifetime` | 1 hour | Age at which a connection is closed |
+| `MaxConnIdleTime` | 30 minutes | Idle time after which a connection is closed |
+| `HealthCheckPeriod` | 1 minute | Interval between health checks of idle connections |
+
+### Run on a pool you own
+
+When your application already has a pool, or when several stores must share one, pass it in.
+`Connect` then only pings the pool and `Disconnect` leaves it open:
 
 ```go
 pool, err := pgxpool.New(ctx, "postgres://ego:secret@127.0.0.1:5432/ego?search_path=public")
 if err != nil {
-	log.Fatalf("create pool: %v", err)
+    return err
 }
 defer pool.Close()
 
-store := pgstore.NewOffsetStoreWithPool(pool)
-if err := store.Connect(ctx); err != nil { // only pings the pool
-	log.Fatalf("connect store: %v", err)
+store := postgres.NewOffsetStoreWithPool(pool)
+if err := store.Connect(ctx); err != nil {
+    return err
 }
-defer store.Disconnect(ctx) // never closes a pool it did not create
+defer store.Disconnect(ctx)
 ```
 
-The store only depends on the `Pool` interface (`Exec`, `Query`, `Ping`), which `*pgxpool.Pool` satisfies as is.
-Any type with those methods works too, for instance a pool wrapped for tracing or `pgxmock.PgxPoolIface` in unit tests.
-Ownership stays with the caller: `Disconnect` never closes a pool it did not create, so a single pool can back the event, snapshot, durable state and offset stores at once.
+The store depends on the `Pool` interface, which declares `Exec`, `Query` and `Ping`.
+A `*pgxpool.Pool` satisfies it as is, and so does any wrapper of your own, for instance one that adds tracing.
+`Close` is deliberately absent, so a store never closes a pool it did not create.
+The same pool can therefore back the event, snapshot, durable state and offset stores of one application.
+Those four modules all declare a package named `postgres`, so alias them on import when you use more than one:
+
+```go
+import (
+    eventstore "github.com/tochemey/ego-contrib/eventstore/postgres"
+    snapshotstore "github.com/tochemey/ego-contrib/snapshotstore/postgres"
+)
+```
+
+### Plug the store into eGo
+
+Pass the store to `ego.WithOffsetStore`, alongside the events store the projections read from:
+
+```go
+config := ego.NewConfig(eventsStore, ego.WithOffsetStore(store))
+
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
+
+engine, err := ego.NewEngine(actorSystem, config)
+```
+
+eGo commits offsets as its projections advance, so writing them by hand is only needed when you use the store outside of an engine.
+
+### Write and read an offset directly
+
+`WriteOffset` upserts the row of a projection and shard. An offset that is missing or empty is rejected:
+
+```go
+err := store.WriteOffset(ctx, &egopb.Offset{
+    ProjectionName: "accounts-projection",
+    ShardNumber:    3,
+    Value:          1712345678901,
+    Timestamp:      time.Now().UnixMilli(),
+})
+```
+
+`GetCurrentOffset` returns the offset reached on one shard, or `nil` when the projection never wrote it:
+
+```go
+offset, err := store.GetCurrentOffset(ctx, &egopb.ProjectionId{
+    ProjectionName: "accounts-projection",
+    ShardNumber:    3,
+})
+if offset == nil {
+    // the projection has not started on this shard
+}
+```
+
+### Replay a projection from the start
+
+`ResetOffset` sets one value on every shard of a projection in a single statement, leaving other projections untouched.
+Passing `0` makes the projection reprocess its whole journal on the next run:
+
+```go
+err := store.ResetOffset(ctx, "accounts-projection", 0)
+```
+
+Stop the projection before resetting it, otherwise it keeps committing offsets while you rewind them.
+Reprocessing replays events the projection already handled, so its handler has to tolerate that.
 
 ## Testing
-- Run all module tests: `go test ./...`
-- Docker-based harness: `offsetstore/postgres/helper_test.go` spins up PostgreSQL through Testcontainers-Go
-- Repository-wide recipe: run `make test` from the repository root, or `make test/offsetstore/postgres` for this module only
 
-## Operational Notes
-- `WriteOffset` upserts the row of the projection/shard pair, so the table never holds more than one row per pair
-- `ResetOffset` updates every shard of the provided projection in a single statement
-- Pool settings (sizes, lifetimes, health checks) and the SSL mode are fields of `Config`; leave them empty for the defaults, or bring your own pool
-- Remember to import the protobuf packages that describe your offsets (eGo registers them automatically, but custom messages must also be in scope)
+`go test ./...` runs the suite. Docker must be running, since the integration tests start PostgreSQL with Testcontainers-Go.
+The unit tests run the store on a `pgxmock` pool through `NewOffsetStoreWithPool`, which needs no database.
+
+From the repository root, `make test/offsetstore/postgres` runs the same suite.

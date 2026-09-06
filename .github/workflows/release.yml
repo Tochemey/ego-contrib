@@ -23,6 +23,10 @@ jobs:
           - offsetstore/memory
           - offsetstore/postgres
           - snapshotstore/postgres
+          - eventstore/sqlite
+          - durablestore/sqlite
+          - offsetstore/sqlite
+          - snapshotstore/sqlite
     steps:
       - uses: actions/checkout@v6
 

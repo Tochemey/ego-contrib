@@ -1,99 +1,125 @@
-# Durable State Store (Amazon DynamoDB)
+# Durable State Store (DynamoDB)
 
 ## Overview
-This module persists durable state for [eGo](https://github.com/Tochemey/ego) on top of Amazon DynamoDB. 
-It fulfils the `github.com/tochemey/ego/v3/persistence.StateStore` contract and stores both the serialized state payload and its protobuf manifest so a snapshot can be reconstructed later.
 
-## Features
-- Stateless design: `Connect`, `Disconnect`, and `Ping` are inexpensive no-ops
-- `PutItem`- based upsert semantics; the latest write wins per `PersistenceID`
-- Stores protobuf payloads alongside the manifest for reliable re-hydration
-- Minimal configuration—only provide a table name and a DynamoDB client
+This module persists the durable state of [eGo](https://github.com/Tochemey/ego) entities in Amazon DynamoDB.
+It implements `github.com/tochemey/ego/v4/persistence.StateStore` on top of the AWS SDK for Go v2.
 
-## Prerequisites
-Create a table that matches the expected schema before you start the actor system:
+A durable state entity keeps no journal. Only its latest state is stored, as protobuf bytes together with the full name of its message, so it can be unmarshalled back into the right type when the entity restarts.
+Each write is a `PutItem` on the persistence id, so the table holds exactly one item per entity and the last write wins.
 
-| Attribute        | Type | Notes                                         |
-|------------------|------|-----------------------------------------------|
-| `PersistenceID`  | S    | Partition key (hash key)                      |
-| `VersionNumber`  | N    | Optional helper for optimistic workflows      |
-| `StatePayload`   | B    | Raw protobuf bytes from `proto.Marshal`       |
-| `StateManifest`  | S    | Fully qualified protobuf message name         |
-| `Timestamp`      | N    | Unix epoch milliseconds                       |
-| `ShardNumber`    | N    | Enables sharded durable-state deployments     |
+The store holds no connection. `Connect`, `Disconnect` and `Ping` do nothing, because the DynamoDB client is stateless and manages its own HTTP transport.
 
-You can provision the table with on-demand billing for local testing. The `testkit.go` helper spins up DynamoDB Local via Docker and creates this schema automatically.
+## Schema
 
-## Installation
+Create the table before starting your application. It needs a single attribute in its key schema:
+
+| Attribute | Type | Role |
+|---|---|---|
+| `PersistenceID` | String | Partition key |
+| `VersionNumber` | Number | Version of the state, written by eGo |
+| `StatePayload` | Binary | Serialized protobuf bytes |
+| `StateManifest` | String | Protobuf message name used to rebuild the state |
+| `Timestamp` | Number | Unix epoch milliseconds |
+| `ShardNumber` | Number | Shard the entity belongs to |
+
+Only the partition key has to be declared. DynamoDB is schemaless for the other attributes, and the store writes them on every item.
+
 ```bash
-go get github.com/tochemey/ego-contrib/durablestore/dynamodb
+aws dynamodb create-table \
+  --table-name states_store \
+  --attribute-definitions AttributeName=PersistenceID,AttributeType=S \
+  --key-schema AttributeName=PersistenceID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
 ```
 
-## Quickstart
+On-demand billing suits an unpredictable write rate. Switch to provisioned capacity when your throughput is steady and known.
+
+## Installation
+
+```bash
+go get github.com/tochemey/ego-contrib/durablestore/dynamodb@vX.Y.Z
+```
+
+## HowTo
+
+### Create the store
+
+The store takes a table name and a DynamoDB client you build and own:
+
+This module's package is named `dynamodb`, like the AWS SDK one, so alias it on import:
+
 ```go
-package main
-
 import (
-	"context"
-	"log"
-	"time"
-
-	dynamostore "github.com/tochemey/ego-contrib/durablestore/dynamodb"
-	"github.com/tochemey/ego/v3/egopb"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	accountpb "github.com/acme/billing/proto"
+    "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+    ddbstore "github.com/tochemey/ego-contrib/durablestore/dynamodb"
 )
 
-func main() {
-	ctx := context.Background()
+cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
+if err != nil {
+    return err
+}
 
-	awsCfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Fatalf("load AWS config: %v", err)
-	}
+client := dynamodb.NewFromConfig(cfg)
+store := ddbstore.NewDurableStore("states_store", client)
+```
 
-	client := dynamodb.NewFromConfig(awsCfg)
-	store := dynamostore.NewDurableStore("states_store", client)
-	_ = store.Connect(ctx) // optional; kept for interface symmetry
-	defer store.Disconnect(ctx)
+Credentials, region, retries and endpoints come from the AWS configuration, so the store adds no settings of its own.
+Point the client at DynamoDB Local by setting a base endpoint on it, which is what the test helper does.
 
-	payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
+### Plug the store into eGo
 
-	state := &egopb.DurableState{
-		PersistenceId:  "account-42",
-		VersionNumber:  1,
-		ResultingState: payload,
-		Timestamp:      time.Now().UnixMilli(),
-		Shard:          0,
-	}
+Pass the store to `ego.WithStateStore`. Durable state deployments that host no event-sourced entity pass `nil` as the events store:
 
-	if err := store.WriteState(ctx, state); err != nil {
-		log.Fatalf("persist state: %v", err)
-	}
+```go
+config := ego.NewConfig(nil, ego.WithStateStore(store))
 
-	snapshot, err := store.GetLatestState(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("load state: %v", err)
-	}
-	if snapshot == nil {
-		log.Println("no durable state yet")
-	}
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
+
+engine, err := ego.NewEngine(actorSystem, config)
+```
+
+### Write and read a state directly
+
+`WriteState` upserts the item of the entity:
+
+```go
+payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
+if err != nil {
+    return err
+}
+
+err = store.WriteState(ctx, &egopb.DurableState{
+    PersistenceId:  "account-42",
+    VersionNumber:  2,
+    ResultingState: payload,
+    Timestamp:      time.Now().UnixMilli(),
+    Shard:          3,
+})
+```
+
+`GetLatestState` returns the stored state, or `nil` when the entity has never been written:
+
+```go
+state, err := store.GetLatestState(ctx, "account-42")
+if state == nil {
+    // no state recorded for this entity
 }
 ```
 
-> **Tip:** DynamoDB keeps the protobuf manifests as strings. Ensure your protobuf packages are imported so their descriptors are registered in `protoregistry.GlobalTypes`; otherwise the store cannot rehydrate records.
+The read is a `GetItem` on the partition key, so it is eventually consistent by default.
+An entity that was just written on another node may therefore read a slightly stale state.
+
+### Unmarshalling on read
+
+The store resolves the state through `protoregistry.GlobalTypes` using the manifest recorded next to the payload.
+Import the generated packages of your state messages in the binary that reads them, otherwise the lookup fails.
 
 ## Testing
-- Local stack: `go test ./...` (or `make test/durablestore/dynamodb` from the repository root)
-- Integration: see `durablestore/dynamodb/testkit.go` for a Docker-based DynamoDB Local harness you can reuse in your suites
 
-## Operational Notes
-- Writes replace the entire item for a `PersistenceID`; add conditional expressions externally if you require optimistic concurrency
-- `GetLatestState` returns `(nil, nil)` when no durable state exists
-- Handle AWS credentials and retry policies through the standard AWS SDK v2 configuration chain
+`go test ./...` runs the suite. Docker must be running, since the tests start DynamoDB Local with Testcontainers-Go and create the table themselves.
+From the repository root, `make test/durablestore/dynamodb` runs the same suite.

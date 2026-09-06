@@ -1,79 +1,90 @@
-# Durable State Store (Memory Backend)
+# Durable State Store (Memory)
 
 ## Overview
-This module supplies an in-memory implementation of [eGo](https://github.com/Tochemey/ego)'s `persistence.StateStore` interface. 
-It is perfect for unit tests, demonstrations, and small prototypes where you do not need persistence across process restarts.
 
-## Features
-- Fully satisfies `github.com/tochemey/ego/v3/persistence.StateStore`
-- Backed by a thread-safe `sync.Map` with atomic connection guards
-- Zero external services or schema management
-- Automatic cleanup on `Disconnect`; state does not survive process shutdown
+This module keeps the durable state of [eGo](https://github.com/Tochemey/ego) entities in memory.
+It implements `github.com/tochemey/ego/v4/persistence.StateStore` on top of a `sync.Map`, so reads and writes are safe from several goroutines.
+
+A durable state entity keeps no journal. Only its latest state is held, one entry per persistence id, and writing a state replaces the previous one.
+
+Nothing survives the process. This store is meant for unit tests, examples and prototypes, not for production.
+
+## Schema
+
+None. The store holds its entries in memory, so there is nothing to provision.
 
 ## Installation
+
 ```bash
-go get github.com/tochemey/ego-contrib/durablestore/memory
+go get github.com/tochemey/ego-contrib/durablestore/memory@vX.Y.Z
 ```
 
-## Quickstart
+## HowTo
+
+### Create the store
+
+The constructor takes no argument:
+
 ```go
-package main
+store := memory.NewStateStore()
 
-import (
-	"context"
-	"log"
-	"time"
+if err := store.Connect(ctx); err != nil {
+    return err
+}
+defer store.Disconnect(ctx)
+```
 
-	memory "github.com/tochemey/ego-contrib/durablestore/memory"
-	"github.com/tochemey/ego/v3/egopb"
-	"google.golang.org/protobuf/types/known/anypb"
+`Disconnect` clears every state it holds, and this store has no option to keep them.
+When a test needs its states across a reconnect, keep the store connected for the whole test instead.
 
-	accountpb "github.com/acme/billing/proto" // import your generated protobuf packages
-)
+### Plug the store into eGo
 
-func main() {
-	ctx := context.Background()
+Pass the store to `ego.WithStateStore`. Durable state deployments that host no event-sourced entity pass `nil` as the events store:
 
-	store := memory.NewStateStore()
-	if err := store.Connect(ctx); err != nil {
-		log.Fatalf("connect durable store: %v", err)
-	}
-	defer store.Disconnect(ctx)
+```go
+config := ego.NewConfig(nil, ego.WithStateStore(store))
 
-	account := &accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200}
-	statePayload, err := anypb.New(account)
-	if err != nil {
-		log.Fatalf("wrap state payload: %v", err)
-	}
+actorSystem, err := goakt.NewActorSystem("accounts", config.GoaktOptions()...)
+if err != nil {
+    return err
+}
 
-	state := &egopb.DurableState{
-		PersistenceId:  "account-42",
-		VersionNumber:  1,
-		ResultingState: statePayload,
-		Timestamp:      time.Now().UnixMilli(),
-	}
+engine, err := ego.NewEngine(actorSystem, config)
+```
 
-	if err := store.WriteState(ctx, state); err != nil {
-		log.Fatalf("write state: %v", err)
-	}
+Swapping this store for the PostgreSQL, DynamoDB or Cassandra one is a one-line change, since they all satisfy the same interface.
 
-	latest, err := store.GetLatestState(ctx, "account-42")
-	if err != nil {
-		log.Fatalf("read state: %v", err)
-	}
+### Write and read a state directly
 
-	log.Printf("latest version: %d", latest.GetVersionNumber())
+`WriteState` stores the state under its persistence id, replacing whatever was there:
+
+```go
+payload, err := anypb.New(&accountpb.AccountState{AccountId: "account-42", BalanceCents: 4200})
+if err != nil {
+    return err
+}
+
+err = store.WriteState(ctx, &egopb.DurableState{
+    PersistenceId:  "account-42",
+    VersionNumber:  2,
+    ResultingState: payload,
+    Timestamp:      time.Now().UnixMilli(),
+    Shard:          3,
+})
+```
+
+`GetLatestState` returns the stored state, or `nil` when the entity has never been written:
+
+```go
+state, err := store.GetLatestState(ctx, "account-42")
+if state == nil {
+    // no state recorded for this entity
 }
 ```
 
-> **Note:** The store uses `protoregistry.GlobalTypes` to hydrate messages. Ensure the protobuf packages that define the messages you persist are imported so their descriptors are registered.
+Unlike the database-backed stores, this one keeps the protobuf message as it was given, so nothing is marshalled or unmarshalled and no manifest lookup takes place.
 
 ## Testing
-```bash
-go test ./...
-```
 
-## Limitations
-- Designed for non-production scenarios; data lives only in memory
-- Calling `Disconnect` purges every record (unless the process exits sooner)
-- Supports a single logical node; shard coordination must be handled by your tests
+`go test ./...` runs the suite. No Docker and no database are needed.
+From the repository root, `make test/durablestore/memory` runs the same suite.
